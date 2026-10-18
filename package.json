@@ -1,0 +1,64 @@
+{
+  "type": "module",
+  "license": "Apache-2.0",
+  "name": "@sovereignbase/package-name",
+  "version": "0.0.0",
+  "description": "",
+  "keywords": [
+    "typescript",
+    "sovereignbase"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "format": "prettier . --write",
+    "build": "npm run build:package && npm run build:docs",
+    "build:package": "tsdown",
+    "build:docs": "typedoc",
+    "test": "npm run build && npm run typecheck && npm run test:vitest && npm run test:e2e",
+    "typecheck": "tsc --noEmit --project test/tsconfig.json",
+    "test:vitest": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "bench": "npm run build && node benchmark/bench.js",
+    "prepare": "husky",
+    "prepublishOnly": "npm run test && npm run bench"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "^5.0.5",
+    "husky": "^9.1.7",
+    "playwright": "^1.64.1",
+    "prettier": "^3.9.10",
+    "tsdown": "^0.23.1",
+    "typedoc": "^0.28.20",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sovereignbase/package-name.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sovereignbase/package-name/issues"
+  },
+  "homepage": "https://sovereignbase.dev/package-name"
+}
