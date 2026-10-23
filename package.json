@@ -63,6 +63,7 @@
   "homepage": "https://sovereignbase.dev/package-name",
   "dependencies": {
     "@sovereignbase/bytecodec": "^2.0.1",
+    "@sovereignbase/cryptosuite": "^3.2.0",
     "@sovereignbase/sequenced": "^0.0.2",
     "@sovereignbase/sequencer": "^1.1.1",
     "@sovereignbase/storage": "^3.2.0"
