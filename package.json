@@ -64,8 +64,10 @@
   "dependencies": {
     "@sovereignbase/bytecodec": "^2.0.1",
     "@sovereignbase/cryptosuite": "^3.2.0",
+    "@sovereignbase/hardware-bound": "^2.0.2",
     "@sovereignbase/sequenced": "^0.0.2",
     "@sovereignbase/sequencer": "^1.1.1",
-    "@sovereignbase/storage": "^3.2.0"
+    "@sovereignbase/storage": "^3.2.0",
+    "@sovereignbase/utils": "^2.4.0"
   }
 }
