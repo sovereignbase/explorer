@@ -1,16 +1,23 @@
-import { RecentEntriesDelta } from '../RecentEntries/class.js'
+import type { RecentEntriesDelta } from '../RecentEntries/class.js'
+import type { CredentialEntriesDelta } from '../CredentialEntries/class.js'
 
 export type AuthenticationResult =
   'authenticated' | 'authenticator-error' | 'invalid-data-pin'
 
-export type ExplorerDelta = RecentEntriesDelta | ['other' | []]
+export type AuthenticationSetupParams = Readonly<{
+  credentialName: string
+  setupParamas: string
+}>
+
+export type ExplorerDelta =
+  RecentEntriesDelta | CredentialEntriesDelta | ['other' | []]
 
 /**
  * Maps text event names to their `CustomEvent.detail` payloads.
  */
 export type ExplorerEventMap = {
   authenticated: boolean
-  delta: RecentEntriesDelta
+  delta: ExplorerDelta
 }
 
 /**

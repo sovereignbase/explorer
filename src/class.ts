@@ -2,9 +2,12 @@ import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
 import { loadObject, storeObject, type URLString } from '@sovereignbase/storage'
 import { unknownError } from './.errors/unkown.js'
 import type {
-  ExplorerEventMap,
   AuthenticationResult,
+  AuthenticationSetupParams,
+  //
+  ExplorerEventMap,
   ExplorerEventListenerFor,
+  //
   ExplorerDelta,
 } from './.types/type.js'
 import { RecentEntries } from './RecentEntries/class.js'
@@ -13,6 +16,7 @@ import {
   deriveDeviceEntropy,
   type DeviceBindingStorage,
 } from '@sovereignbase/hardware-bound'
+import { isRecord } from '@sovereignbase/utils'
 
 export class Explorer {
   public static databaseID: string
@@ -32,7 +36,7 @@ export class Explorer {
   public static async authenticate(
     dataPin: string,
     storageURL: URLString,
-    bindingStorage?: DeviceBindingStorage
+    setupParams?: AuthenticationSetupParams
   ): Promise<AuthenticationResult> {
     this.storageURL = storageURL
     //
@@ -55,7 +59,7 @@ export class Explorer {
     let virtualEntropy: Uint8Array
     ////////
     // SETUP
-    if (typeof bindingStorage === 'string') {
+    if (isRecord(setupParams)) {
       virtualEntropy = Bytes.generate(128)
 
       void (await this.storeObjectByID(
