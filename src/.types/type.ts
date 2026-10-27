@@ -3,6 +3,8 @@ import { RecentEntriesDelta } from '../RecentEntries/class.js'
 export type AuthenticationResult =
   'authenticated' | 'authenticator-error' | 'invalid-data-pin'
 
+export type ExplorerDelta = RecentEntriesDelta | ['other' | []]
+
 /**
  * Maps text event names to their `CustomEvent.detail` payloads.
  */

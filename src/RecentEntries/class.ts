@@ -24,7 +24,7 @@ export type RecentEntry = {
   cipherKey: CipherKey
 
   /** The date and time at which the object was most recently accessed. */
-  dateAccessed: string
+  dateAccessed: number
 }
 
 /**
@@ -162,18 +162,16 @@ export class RecentEntries {
       throw unknownError(cause, 'RecentEntries.update()')
     }
   }
-
   /**
-   * Returns an iterator over the recent entries in access order.
+   * Returns the recent entries ordered by most recent access.
    */
-  values(): ArrayIterator<RecentEntry> {
+  values(): ReadonlyArray<Readonly<RecentEntry>> {
     try {
-      return this.state.values()
+      return this.state.slice().sort((a, b) => b.dateAccessed - a.dateAccessed)
     } catch (cause) {
       throw unknownError(cause, 'RecentEntries.values()')
     }
   }
-
   //
   /**
    * Applies a sequenced delta to the recent entries list.

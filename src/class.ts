@@ -5,6 +5,7 @@ import type {
   ExplorerEventMap,
   AuthenticationResult,
   ExplorerEventListenerFor,
+  ExplorerDelta,
 } from './.types/type.js'
 import { RecentEntries } from './RecentEntries/class.js'
 import { Bytes } from '@sovereignbase/bytecodec'
@@ -43,7 +44,7 @@ export class Explorer {
     const credentialSecret = await Bytes.derive(deviceEntropy, dataPinBytes, 32)
     const credentialID = await Cryptographic.identifier.derive(
       credentialSecret,
-      { encoding: 'utf8', value: '@sovereignbase/explorer:credentialID' },
+      Bytes.utf8.decode('@sovereignbase/explorer:credentialID'),
       32
     )
     const credentialCipherKey = await Cryptographic.cipherMessage.deriveKey(
@@ -80,7 +81,7 @@ export class Explorer {
 
     this.databaseID = await Cryptographic.identifier.derive(
       this.databaseSecret,
-      { encoding: 'utf8', value: '@sovereignbase/explorer:databaseID' },
+      Bytes.utf8.decode('@sovereignbase/explorer:databaseID'),
       32
     )
 
@@ -120,25 +121,42 @@ export class Explorer {
     )
   }
 
-  public static async get recentEntries(): RecentEntries {
-    if (this._recentEntries) return this._recentEntries
-    const salt = Bytes.utf8.decode('@sovereignbase/explorer:recentEntries')
-    const recentEntriesID = await Cryptographic.identifier.derive(
-      {
-        value: this.databaseID,
-        encoding: 'base64url',
-      },
-      salt,
+  public static async getRecentEntries(): Promise<RecentEntries> {
+    let recentEntries: RecentEntries
+
+    const id = await Cryptographic.identifier.derive(
+      this.databaseSecret,
+      Bytes.utf8.decode('@sovereignbase/explorer:recentEntriesID'),
       32
     )
-    const recentEntriesCipherKey = await Cryptographic.cipherMessage.deriveKey(
+    const ck = await Cryptographic.cipherMessage.deriveKey(
       this.databaseSecret,
-      salt
+      Bytes.utf8.decode('@sovereignbase/explorer:recentEntriesCipherKey')
     )
 
-    this.cipherKeyCache.set(recentEntriesID, recentEntriesCipherKey)
+    const trustedSnapshot = this.loadObjectByID(
+      id,
+      ck,
+      (snapshot) => void recentEntries!.merge(snapshot)
+    )
+
+    recentEntries = new RecentEntries(id, 0, trustedSnapshot)
+
+    return recentEntries
   }
-  private static _recentEntries: RecentEntries
+
+  public static apply(data: unknown): void {
+    void queueMicrotask(async () => {
+      if (!this.isExplorerDelta(data)) return
+      switch (data[0]) {
+        case 'recentEntries': {
+          void (await this.getRecentEntries()).apply(data)
+          break
+        }
+      }
+      return
+    })
+  }
 
   /**
    * Registers a callback or listener object for a typed document event.
@@ -198,5 +216,9 @@ export class Explorer {
     } catch (cause) {
       throw unknownError(cause, 'Explorer.dispatchEvent()')
     }
+  }
+
+  private static isExplorerDelta(data: unknown): data is ExplorerDelta {
+    return Array.isArray(data) && typeof data[0] === 'string'
   }
 }
