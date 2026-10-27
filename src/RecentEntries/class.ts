@@ -167,7 +167,11 @@ export class RecentEntries {
    */
   values(): ReadonlyArray<Readonly<RecentEntry>> {
     try {
-      return this.state.slice().sort((a, b) => b.dateAccessed - a.dateAccessed)
+      return this.state
+        .slice()
+        .sort(
+          (a, b) => b.dateAccessed - a.dateAccessed || a.id.localeCompare(b.id)
+        )
     } catch (cause) {
       throw unknownError(cause, 'RecentEntries.values()')
     }
