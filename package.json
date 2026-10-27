@@ -68,6 +68,6 @@
     "@sovereignbase/sequenced": "^0.0.2",
     "@sovereignbase/sequencer": "^1.1.1",
     "@sovereignbase/storage": "^3.2.0",
-    "@sovereignbase/utils": "^2.4.0"
+    "@sovereignbase/utils": "^2.5.0"
   }
 }
