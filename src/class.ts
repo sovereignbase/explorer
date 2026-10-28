@@ -1,11 +1,16 @@
-import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
 import {
   deleteObject,
   loadObject,
   storeObject,
   type URLString,
 } from '@sovereignbase/storage'
-import { unknownError } from './.errors/unkown.js'
+import { DeepReadonly, isRecord } from '@sovereignbase/utils'
+import { Bytes } from '@sovereignbase/bytecodec'
+import { readableUserAgent } from '@sovereignbase/dom-utils'
+import { SequencedArrayChange } from '@sovereignbase/sequenced'
+import { deriveDeviceEntropy } from '@sovereignbase/hardware-bound'
+import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
+//
 import type {
   AuthenticationResult,
   AuthenticationSetupParams,
@@ -15,17 +20,16 @@ import type {
   //
   ExplorerDelta,
 } from './.types/type.js'
-import { RecentEntries, RecentEntry } from './RecentEntries/class.js'
+//
+import { unknownError } from './.errors/unkown.js'
+//
+import { RecentEntries, type RecentEntry } from './RecentEntries/class.js'
 import {
   CredentialEntries,
-  CredentialEntry,
+  type CredentialEntry,
   type CredentialEvent,
+  type CredentialEntriesChange,
 } from './CredentialEntries/class.js'
-import { Bytes } from '@sovereignbase/bytecodec'
-import { deriveDeviceEntropy } from '@sovereignbase/hardware-bound'
-import { isRecord } from '@sovereignbase/utils'
-import { readableUserAgent } from '@sovereignbase/dom-utils'
-import { SequencedArrayChange } from '@sovereignbase/sequenced'
 
 export class Explorer {
   public static databaseID: string
@@ -120,19 +124,18 @@ export class Explorer {
   }
 
   public static async listCredentialEntries(
-    onChange?: (splice: SequencedArrayChange<CredentialEntry>) => void
+    onChange?: (splice: CredentialEntriesChange) => void
   ): Promise<
     [
       cleanup: () => void,
-      entries: ReadonlyArray<Readonly<CredentialEntry>>,
+      entries: DeepReadonly<Array<CredentialEntry>>,
       sessionCredentialID: string,
     ]
   > {
     const credentialEntries = await this.loadCredentialEntries()
 
     const listener = onChange
-      ? ({ detail }: CustomEvent<SequencedArrayChange<CredentialEntry>>) =>
-          onChange(detail)
+      ? ({ detail }: CustomEvent<CredentialEntriesChange>) => onChange(detail)
       : undefined
 
     if (listener) credentialEntries.addEventListener('change', listener)
@@ -164,7 +167,7 @@ export class Explorer {
       () => {
         if (listener) recentEntries.removeEventListener('change', listener)
       },
-      recentEntries.values(),
+      recentEntries.list(),
     ]
   }
 

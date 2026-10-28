@@ -78,7 +78,14 @@ export type CredentialEvent = {
  * Represents a sequenced delta produced by the credential entries list.
  */
 export type CredentialEntriesDelta = Readonly<
-  ['credentialEntries', SequencedArrayDelta<CredentialEntry>]
+  ['credentialEntries', DeepReadonly<SequencedArrayDelta<CredentialEntry>>]
+>
+
+/**
+ * Represents a sequenced change produced by the credential entries list.
+ */
+export type CredentialEntriesChange = DeepReadonly<
+  SequencedArrayChange<CredentialEntry>
 >
 
 /**
@@ -86,7 +93,7 @@ export type CredentialEntriesDelta = Readonly<
  */
 export type CredentialEntriesEventMap = {
   /** Fired when the credential entries list changes. */
-  change: SequencedArrayChange<CredentialEntry>
+  change: CredentialEntriesChange
 }
 
 /**
@@ -313,7 +320,7 @@ export class CredentialEntries {
    *
    * Entries with equal timestamps are ordered by identifier.
    */
-  public list(): ReadonlyArray<DeepReadonly<CredentialEntry>> {
+  public list(): DeepReadonly<Array<CredentialEntry>> {
     try {
       return this.state
         .slice()
