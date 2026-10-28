@@ -2,37 +2,59 @@ import type { RecentEntriesDelta } from '../RecentEntries/class.js'
 import type { CredentialEntriesDelta } from '../CredentialEntries/class.js'
 import { DeviceBindingStorage } from '@sovereignbase/hardware-bound'
 
+/**
+ * Represents the outcome of a database authentication attempt.
+ */
 export type AuthenticationResult =
-  'authenticated' | 'authenticator-error' | 'invalid-data-pin'
+  /** The database was successfully authenticated. */
+  | 'authenticated'
+  /** The device authenticator could not provide the required entropy. */
+  | 'authenticator-error'
+  /** The supplied data PIN could not unlock the credential. */
+  | 'invalid-data-pin'
 
+/**
+ * Describes the parameters used to register a new database credential.
+ */
 export type AuthenticationSetupParams = Readonly<{
+  /** The display name assigned to the credential. */
   credentialName: string
+
+  /** The storage mechanism used to bind the credential to the device. */
   bindingStorage: DeviceBindingStorage
 }>
 
+/**
+ * Represents a synchronized delta exchanged between Explorer instances.
+ *
+ * Includes changes to recent and credential entries, as well as
+ * a reserved variant for other delta types.
+ */
 export type ExplorerDelta =
   RecentEntriesDelta | CredentialEntriesDelta | ['other' | []]
 
 /**
- * Maps text event names to their `CustomEvent.detail` payloads.
+ * Maps Explorer event names to their detail types.
  */
 export type ExplorerEventMap = {
+  /** Fired when the database authentication state changes. */
   authenticated: boolean
+
+  /** Fired when a synchronized delta is produced. */
   delta: ExplorerDelta
 }
 
 /**
- * A callback or listener object for a text event.
+ * Represents an event listener for an {@link Explorer} event.
  *
- * @typeParam K The event name that determines the event's `detail` type.
+ * @typeParam K The event name that determines the event detail type.
  */
 export type ExplorerEventListener<K extends keyof ExplorerEventMap> =
   | ((event: CustomEvent<ExplorerEventMap[K]>) => void)
   | { handleEvent(event: CustomEvent<ExplorerEventMap[K]>): void }
 
 /**
- * Resolves a document event name to its typed listener, or uses a DOM event
- * listener for an unrecognized event name.
+ * Resolves an event name to its corresponding listener type.
  *
  * @typeParam K The event name to resolve.
  */
