@@ -11,6 +11,7 @@ import type {
   ExplorerDelta,
 } from './.types/type.js'
 import { RecentEntries } from './RecentEntries/class.js'
+import { CredentialEntries } from './CredentialEntries/class.js'
 import { Bytes } from '@sovereignbase/bytecodec'
 import {
   deriveDeviceEntropy,
@@ -24,6 +25,7 @@ export class Explorer {
   //
   private static storageURL: URLString
   private static eventTarget?: EventTarget
+  private static sessionCredentialID: string
   private static databaseSecret: Readonly<Uint8Array>
 
   public static readonly cipherKeyCache: Map<string, CipherKey> = new Map()
@@ -46,24 +48,24 @@ export class Explorer {
     const dataPinBytes = Bytes.utf8.decode(dataPin)
     //
     const credentialSecret = await Bytes.derive(deviceEntropy, dataPinBytes, 32)
-    const credentialID = await Cryptographic.identifier.derive(
+    this.sessionCredentialID = await Cryptographic.identifier.derive(
       credentialSecret,
-      Bytes.utf8.decode('@sovereignbase/explorer:credentialID'),
+      Bytes.utf8.decode('@sovereignbase/exploreCredentialID'),
       32
     )
     const credentialCipherKey = await Cryptographic.cipherMessage.deriveKey(
       credentialSecret,
-      Bytes.utf8.decode('@sovereignbase/explorer:credentialCipherKey')
+      Bytes.utf8.decode('@sovereignbase/explorer:CredentialCipherKey')
     )
     //
     let virtualEntropy: Uint8Array
     ////////
     // SETUP
     if (isRecord(setupParams)) {
-      virtualEntropy = Bytes.generate(128)
+      virtualEntropy = Bytes.generate(64)
 
       void (await this.storeObjectByID(
-        credentialID,
+        this.sessionCredentialID,
         virtualEntropy,
         credentialCipherKey
       ))
@@ -72,20 +74,20 @@ export class Explorer {
     // LOGIN
     else {
       const result = await this.loadObjectByID(
-        credentialID,
+        this.sessionCredentialID,
         credentialCipherKey
       )
-      if (!(result instanceof Uint8Array) || result.byteLength !== 128)
+      if (!(result instanceof Uint8Array) || result.byteLength !== 64)
         return 'invalid-data-pin'
 
       virtualEntropy = result
     }
 
-    this.databaseSecret = await Bytes.derive(virtualEntropy, dataPinBytes, 128)
+    this.databaseSecret = await Bytes.derive(virtualEntropy, dataPinBytes, 64)
 
     this.databaseID = await Cryptographic.identifier.derive(
       this.databaseSecret,
-      Bytes.utf8.decode('@sovereignbase/explorer:databaseID'),
+      Bytes.utf8.decode('@sovereignbase/explorer:DatabaseID'),
       32
     )
 
@@ -125,28 +127,62 @@ export class Explorer {
     )
   }
 
+  private static recentEntries?: RecentEntries
+
   public static async getRecentEntries(): Promise<RecentEntries> {
-    let recentEntries: RecentEntries
+    if (this.recentEntries) return this.recentEntries
 
     const id = await Cryptographic.identifier.derive(
       this.databaseSecret,
-      Bytes.utf8.decode('@sovereignbase/explorer:recentEntriesID'),
+      Bytes.utf8.decode('@sovereignbase/explorer:RecentEntriesID'),
       32
     )
     const ck = await Cryptographic.cipherMessage.deriveKey(
       this.databaseSecret,
-      Bytes.utf8.decode('@sovereignbase/explorer:recentEntriesCipherKey')
+      Bytes.utf8.decode('@sovereignbase/explorer:RecentEntriesCipherKey')
     )
 
-    const trustedSnapshot = this.loadObjectByID(
+    const trustedSnapshot = await this.loadObjectByID(
       id,
       ck,
-      (snapshot) => void recentEntries!.merge(snapshot)
+      (snapshot) => void this.recentEntries!.merge(snapshot)
     )
 
-    recentEntries = new RecentEntries(id, 0, trustedSnapshot)
+    this.recentEntries = new RecentEntries(id, ck, 0, trustedSnapshot)
 
-    return recentEntries
+    return this.recentEntries
+  }
+
+  private static credentialEntries?: CredentialEntries
+
+  public static async getCredentialEntries(): Promise<CredentialEntries> {
+    if (this.credentialEntries) return this.credentialEntries
+
+    const id = await Cryptographic.identifier.derive(
+      this.databaseSecret,
+      Bytes.utf8.decode('@sovereignbase/explorer:CredentialEntriesID'),
+      32
+    )
+    const ck = await Cryptographic.cipherMessage.deriveKey(
+      this.databaseSecret,
+      Bytes.utf8.decode('@sovereignbase/explorer:CredentialEntriesCipherKey')
+    )
+
+    const trustedSnapshot = await this.loadObjectByID(
+      id,
+      ck,
+      (snapshot) => void this.credentialEntries!.merge(snapshot)
+    )
+
+    this.credentialEntries = new CredentialEntries(
+      id,
+      ck,
+      this.sessionCredentialID,
+      0,
+      trustedSnapshot
+    )
+
+    return this.credentialEntries
   }
 
   public static apply(data: unknown): void {
@@ -155,6 +191,10 @@ export class Explorer {
       switch (data[0]) {
         case 'recentEntries': {
           void (await this.getRecentEntries()).apply(data)
+          break
+        }
+        case 'credentialEntries': {
+          void (await this.getCredentialEntries()).apply(data)
           break
         }
       }

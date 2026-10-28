@@ -11,7 +11,7 @@ import { afterIdleFor, type WritableArray } from '@sovereignbase/utils'
 import { unknownError } from '../.errors/unkown.js'
 
 /**
- * Describes an entry in the Credential objects list.
+ * Describes an entry in the credential objects list.
  */
 export type CredentialEntry = {
   /** The identifier of the referenced object. */
@@ -20,14 +20,20 @@ export type CredentialEntry = {
   /** The display name of the referenced object. */
   name: string
 
-  /** The cipher key used to access the referenced object. */
+  /** The entropy associated with the credential. */
   entropy: Uint8Array
 
-  /** The date and time at which the object was most Credentially accessed. */
+  /** The timestamp of the most recent use of this credential. */
   lastUsed: number
 
-  /**  */
-  seenUserAgents: Array<string>
+  /** The user agents that have used this credential. */
+  userAgents: Array<{
+    /** The user agent string. */
+    name: string
+
+    /** The timestamp of the most recent use. */
+    lastSeen: number
+  }>
 }
 
 /**
@@ -88,6 +94,8 @@ export class CredentialEntries {
    */
   constructor(
     private readonly id: string,
+    private readonly cipherKey: CipherKey,
+    private readonly sessionCredentialID: string,
     actorID: number,
     trustedSnapshot?: unknown
   ) {
@@ -109,11 +117,7 @@ export class CredentialEntries {
         250,
         (snapshot: SequencedArraySnapshot<CredentialEntry>) => {
           void queueMicrotask(() => {
-            void Explorer.storeObjectByID(
-              this.id,
-              snapshot,
-              Explorer.cipherKeyCache.get(this.id) as CipherKey
-            )
+            void Explorer.storeObjectByID(this.id, snapshot, this.cipherKey)
           })
         }
       )
@@ -172,11 +176,7 @@ export class CredentialEntries {
    */
   values(): ReadonlyArray<Readonly<CredentialEntry>> {
     try {
-      return this.state
-        .slice()
-        .sort(
-          (a, b) => b.lastUsed - a.lastUsed || a.id.localeCompare(b.id)
-        )
+      return this.state.slice().sort()
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.values()')
     }

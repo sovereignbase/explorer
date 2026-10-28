@@ -83,6 +83,7 @@ export class RecentEntries {
    */
   constructor(
     private readonly id: string,
+    private readonly cipherKey: CipherKey,
     actorID: number,
     trustedSnapshot?: unknown
   ) {
@@ -104,11 +105,7 @@ export class RecentEntries {
         250,
         (snapshot: SequencedArraySnapshot<RecentEntry>) => {
           void queueMicrotask(() => {
-            void Explorer.storeObjectByID(
-              this.id,
-              snapshot,
-              Explorer.cipherKeyCache.get(this.id) as CipherKey
-            )
+            void Explorer.storeObjectByID(this.id, snapshot, this.cipherKey)
           })
         }
       )
