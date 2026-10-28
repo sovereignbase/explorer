@@ -1,4 +1,3 @@
-import type { CipherKey } from '@sovereignbase/cryptosuite'
 import {
   Sequenced,
   type SequencedArray,
@@ -6,8 +5,16 @@ import {
   type SequencedArrayChange,
   type SequencedArraySnapshot,
 } from '@sovereignbase/sequenced'
+//
+import type { CipherKey } from '@sovereignbase/cryptosuite'
 import type { DeviceBindingStorage } from '@sovereignbase/hardware-bound'
-import { afterIdleFor, type WritableArray } from '@sovereignbase/utils'
+//
+import {
+  afterIdleFor,
+  type DeepReadonly,
+  type WritableArray,
+} from '@sovereignbase/utils'
+//
 import { Explorer } from '../class.js'
 import { ExplorerError } from '../.errors/class.js'
 import { unknownError } from '../.errors/unkown.js'
@@ -306,7 +313,7 @@ export class CredentialEntries {
    *
    * Entries with equal timestamps are ordered by identifier.
    */
-  public list(): ReadonlyArray<Readonly<CredentialEntry>> {
+  public list(): ReadonlyArray<DeepReadonly<CredentialEntry>> {
     try {
       return this.state
         .slice()
