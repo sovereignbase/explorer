@@ -210,7 +210,7 @@ export class CredentialEntries {
    * @param credentialEvent The credential properties to apply.
    * @throws {ExplorerError} If the event is invalid or setup properties are missing.
    */
-  record(credentialEvent: CredentialEvent): void {
+  public record(credentialEvent: CredentialEvent): void {
     try {
       if (!credentialEvent || typeof credentialEvent !== 'object')
         throw new ExplorerError(
@@ -290,7 +290,7 @@ export class CredentialEntries {
    *
    * @param credentialID The identifier of the credential to revoke.
    */
-  async revoke(credentialID: string): Promise<void> {
+  public async revoke(credentialID: string): Promise<void> {
     try {
       let exists = false
 

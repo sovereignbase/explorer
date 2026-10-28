@@ -1,4 +1,3 @@
-import type { CipherKey } from '@sovereignbase/cryptosuite'
 import {
   Sequenced,
   type SequencedArray,
@@ -6,8 +5,16 @@ import {
   type SequencedArrayChange,
   type SequencedArraySnapshot,
 } from '@sovereignbase/sequenced'
+//
+import type { CipherKey } from '@sovereignbase/cryptosuite'
+//
+import {
+  afterIdleFor,
+  type DeepReadonly,
+  type WritableArray,
+} from '@sovereignbase/utils'
+//
 import { Explorer } from '../class.js'
-import { afterIdleFor, type WritableArray } from '@sovereignbase/utils'
 import { unknownError } from '../.errors/unkown.js'
 
 /**
@@ -31,29 +38,35 @@ export type RecentEntry = {
  * Represents a sequenced delta produced by the recent entries list.
  */
 export type RecentEntriesDelta = Readonly<
-  ['recentEntries', SequencedArrayDelta<RecentEntry>]
+  ['recentEntries', DeepReadonly<SequencedArrayDelta<RecentEntry>>]
 >
 
 /**
- * Maps event names to the values exposed through `CustomEvent.detail`.
+ * Represents a sequenced change produced by the recent entries list.
+ */
+export type RecentEntriesChange = DeepReadonly<
+  SequencedArrayChange<RecentEntry>
+>
+
+/**
+ * Maps recent entries event names to their detail types.
  */
 export type RecentEntriesEventMap = {
   /** Fired when the recent entries list changes. */
-  change: SequencedArrayChange<RecentEntry>
+  change: RecentEntriesChange
 }
 
 /**
  * Represents an event listener for a {@link RecentEntries} event.
  *
- * @typeParam K The event name that determines the event's `detail` type.
+ * @typeParam K The event name that determines the event detail type.
  */
 export type RecentEntriesEventListener<K extends keyof RecentEntriesEventMap> =
   | ((event: CustomEvent<RecentEntriesEventMap[K]>) => void)
   | { handleEvent(event: CustomEvent<RecentEntriesEventMap[K]>): void }
 
 /**
- * Resolves a {@link RecentEntries} event name to its corresponding typed
- * listener.
+ * Resolves an event name to its corresponding listener type.
  *
  * @typeParam K The event name to resolve.
  */
@@ -78,8 +91,9 @@ export class RecentEntries {
    * Creates a recent entries list.
    *
    * @param id The identifier of the persisted recent entries object.
+   * @param cipherKey The key used to encrypt the entries object.
    * @param actorID The actor identifier used by the sequenced array.
-   * @param trustedSnapshot A trusted snapshot used to initialize the state.
+   * @param trustedSnapshot An optional snapshot used to initialize the state.
    */
   constructor(
     private readonly id: string,
@@ -103,10 +117,12 @@ export class RecentEntries {
       //
       const debouncedSave = afterIdleFor(
         250,
-        (snapshot: SequencedArraySnapshot<RecentEntry>) => {
-          void queueMicrotask(() => {
-            void Explorer.storeObjectByID(this.id, snapshot, this.cipherKey)
-          })
+        async (snapshot: SequencedArraySnapshot<RecentEntry>) => {
+          void (await Explorer.storeObjectByID(
+            this.id,
+            snapshot,
+            this.cipherKey
+          ))
         }
       )
       void this.state.addEventListener('snapshot', ({ detail }) => {
@@ -118,15 +134,21 @@ export class RecentEntries {
       })
       //
       const seen = new Set<string>()
-      void this.state.forEach((entry, index) => {
-        if (seen.has(entry.id) || seen.size >= 20) {
-          void this.state.delete(index)
-          return
-        }
-        void seen.add(entry.id)
-      })
+      const duplicates: number[] = []
+
+      for (let index = 0; index < this.state.length; index++) {
+        const entry = this.state.at(index)
+        if (!entry) continue
+
+        if (seen.has(entry.id) || seen.size >= 20) duplicates.push(index)
+        else seen.add(entry.id)
+      }
+
+      for (let index = duplicates.length - 1; index >= 0; index--)
+        void this.state.delete(duplicates[index])
       //
-      if (this.deltaBuffer.length > 0) void this.state.snapshot()
+      if (duplicates.length > 0 || this.deltaBuffer.length > 0)
+        void this.state.snapshot()
       //
     } catch (cause) {
       throw unknownError(cause, 'RecentEntries.constructor()')
@@ -141,13 +163,12 @@ export class RecentEntries {
    *
    * @param accessed The entry that was accessed.
    */
-  update(accessed: RecentEntry): void {
+  public update(accessed: RecentEntry): void {
     try {
-      void this.state.forEach((entry, index) => {
-        if (entry.id === accessed.id) {
-          this.state.delete(index)
-        }
-      })
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        if (this.state.at(index)?.id === accessed.id)
+          void this.state.delete(index)
+      }
 
       void this.state.unshift(accessed)
 
@@ -159,10 +180,32 @@ export class RecentEntries {
       throw unknownError(cause, 'RecentEntries.update()')
     }
   }
+
+  /**
+   * Removes an entry from the recent entries list.
+   *
+   * The referenced object is not deleted.
+   *
+   * @param id The identifier of the entry to remove.
+   */
+  public delete(id: string): void {
+    try {
+      let deleted = false
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        if (this.state.at(index)?.id !== id) continue
+        void this.state.delete(index)
+        deleted = true
+      }
+      if (deleted) void this.state.snapshot()
+    } catch (cause) {
+      throw unknownError(cause, 'RecentEntries.delete()')
+    }
+  }
+
   /**
    * Returns the recent entries ordered by most recent access.
    */
-  list(): ReadonlyArray<Readonly<RecentEntry>> {
+  public list(): DeepReadonly<Array<RecentEntry>> {
     try {
       return this.state
         .slice()
@@ -179,7 +222,7 @@ export class RecentEntries {
    *
    * @param delta The delta to apply.
    */
-  apply(delta: unknown): void {
+  public apply(delta: unknown): void {
     try {
       void this.state.apply(delta)
       void this.state.snapshot()
@@ -193,7 +236,7 @@ export class RecentEntries {
    *
    * @param snapshot The snapshot to merge.
    */
-  merge(snapshot: unknown): void {
+  public merge(snapshot: unknown): void {
     try {
       void this.state.merge(snapshot)
       void this.state.snapshot()
@@ -213,9 +256,8 @@ export class RecentEntries {
    * Registers an event listener for the specified event type.
    *
    * @param type The event type.
-   * @param listener The listener to register, or `null`.
-   * @param options An options object that specifies characteristics of the
-   * event listener.
+   * @param listener The event listener, or `null`.
+   * @param options The event listener options.
    */
   public addEventListener<K extends keyof RecentEntriesEventMap>(
     type: K,
@@ -238,9 +280,8 @@ export class RecentEntries {
    * {@link addEventListener}.
    *
    * @param type The event type.
-   * @param listener The listener to remove, or `null`.
-   * @param options An options object that specifies characteristics of the
-   * event listener.
+   * @param listener The event listener to remove, or `null`.
+   * @param options The event listener options.
    */
   public removeEventListener<K extends keyof RecentEntriesEventMap>(
     type: K,
@@ -259,7 +300,7 @@ export class RecentEntries {
   }
 
   /**
-   * Dispatches an event of the specified type to registered listeners.
+   * Dispatches an event to the registered listeners.
    *
    * @param type The event type.
    * @param detail The value exposed through `CustomEvent.detail`.

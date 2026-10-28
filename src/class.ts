@@ -23,13 +23,18 @@ import type {
 //
 import { unknownError } from './.errors/unkown.js'
 //
-import { RecentEntries, type RecentEntry } from './RecentEntries/class.js'
 import {
   CredentialEntries,
   type CredentialEntry,
   type CredentialEvent,
   type CredentialEntriesChange,
 } from './CredentialEntries/class.js'
+//
+import {
+  RecentEntries,
+  type RecentEntry,
+  type RecentEntriesChange,
+} from './RecentEntries/class.js'
 
 export class Explorer {
   public static databaseID: string
@@ -150,15 +155,12 @@ export class Explorer {
   }
 
   public static async listRecentEntries(
-    onChange?: (splice: SequencedArrayChange<RecentEntry>) => void
-  ): Promise<
-    [cleanup: () => void, entries: ReadonlyArray<Readonly<RecentEntry>>]
-  > {
+    onChange?: (splice: RecentEntriesChange) => void
+  ): Promise<[cleanup: () => void, entries: DeepReadonly<Array<RecentEntry>>]> {
     const recentEntries = await this.loadRecentEntries()
 
     const listener = onChange
-      ? ({ detail }: CustomEvent<SequencedArrayChange<RecentEntry>>) =>
-          onChange(detail)
+      ? ({ detail }: CustomEvent<RecentEntriesChange>) => onChange(detail)
       : undefined
 
     if (listener) recentEntries.addEventListener('change', listener)
