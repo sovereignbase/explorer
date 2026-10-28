@@ -1,4 +1,3 @@
-
 import type { CipherKey } from '@sovereignbase/cryptosuite'
 import {
   Sequenced,
@@ -221,8 +220,9 @@ export class CredentialEntries {
       )
         throw new Error('Missing credential setup properties')
 
-      const userAgents = existing?.userAgents.map(agent => ({ ...agent })) ?? []
-      const agent = userAgents.find(agent => agent.name === userAgent)
+      const userAgents =
+        existing?.userAgents.map((agent) => ({ ...agent })) ?? []
+      const agent = userAgents.find((agent) => agent.name === userAgent)
 
       if (agent) {
         agent.lastSeen = Math.max(agent.lastSeen, timestamp)
@@ -240,8 +240,7 @@ export class CredentialEntries {
       }
 
       for (let index = this.state.length - 1; index >= 0; index--) {
-        if (this.state.at(index)?.id === id)
-          void this.state.delete(index)
+        if (this.state.at(index)?.id === id) void this.state.delete(index)
       }
 
       void this.state.unshift(entry)
@@ -253,7 +252,7 @@ export class CredentialEntries {
 
   /**
    * Removes a credential from the database.
-   * 
+   *
    * @param credentialID The identifier of the credential to remove.
    */
   destroy(credentialID: string): void {
@@ -285,10 +284,7 @@ export class CredentialEntries {
     try {
       return this.state
         .slice()
-        .sort(
-          (a, b) =>
-            b.lastUsed - a.lastUsed || a.id.localeCompare(b.id)
-        )
+        .sort((a, b) => b.lastUsed - a.lastUsed || a.id.localeCompare(b.id))
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.values()')
     }

@@ -1,5 +1,10 @@
 import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
-import { deleteObject, loadObject, storeObject, type URLString } from '@sovereignbase/storage'
+import {
+  deleteObject,
+  loadObject,
+  storeObject,
+  type URLString,
+} from '@sovereignbase/storage'
 import { unknownError } from './.errors/unkown.js'
 import type {
   AuthenticationResult,
@@ -140,7 +145,7 @@ export class Explorer {
   }
 
   public static deleteObjectByID(id: string) {
-    return void deleteObject((this.storageURL + id) as URLString,)  
+    return void deleteObject((this.storageURL + id) as URLString)
   }
 
   private static recentEntries?: RecentEntries
