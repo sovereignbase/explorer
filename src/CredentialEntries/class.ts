@@ -1,3 +1,4 @@
+
 import type { CipherKey } from '@sovereignbase/cryptosuite'
 import {
   Sequenced,
@@ -6,55 +7,85 @@ import {
   type SequencedArrayChange,
   type SequencedArraySnapshot,
 } from '@sovereignbase/sequenced'
-import { Explorer } from '../class.js'
+import type { DeviceBindingStorage } from '@sovereignbase/hardware-bound'
 import { afterIdleFor, type WritableArray } from '@sovereignbase/utils'
+import { Explorer } from '../class.js'
 import { unknownError } from '../.errors/unkown.js'
 
 /**
- * Describes an entry in the credential objects list.
+ * Describes a credential registered with the database.
  */
 export type CredentialEntry = {
-  /** The identifier of the referenced object. */
+  /** The identifier of the credential. */
   id: string
 
-  /** The display name of the referenced object. */
+  /** The display name of the credential. */
   name: string
 
   /** The entropy associated with the credential. */
   entropy: Uint8Array
 
-  /** The timestamp of the most recent use of this credential. */
+  /** The storage mechanism used for device binding. */
+  storage: DeviceBindingStorage
+
+  /** The timestamp of the most recent use of the credential. */
   lastUsed: number
 
-  /** The user agents that have used this credential. */
+  /** The user agents that have used the credential. */
   userAgents: Array<{
     /** The user agent string. */
     name: string
 
-    /** The timestamp of the most recent use. */
+    /** The timestamp of the most recent use by the user agent. */
     lastSeen: number
   }>
 }
 
 /**
- * Represents a sequenced delta produced by the Credential entries list.
+ * Describes the properties used to create or update a credential entry.
+ *
+ * The identifier, timestamp, and user agent are required when applying
+ * a patch. Additional properties are required when creating an entry.
+ */
+export type CredentialPatch = {
+  /** The identifier of the credential. */
+  id?: string
+
+  /** The timestamp of the credential use. */
+  timestamp?: number
+
+  /** The user agent associated with the credential use. */
+  userAgent?: string
+
+  /** The display name of the credential. */
+  name?: string
+
+  /** The entropy associated with the credential. */
+  entropy?: Uint8Array
+
+  /** The storage mechanism used for device binding. */
+  storage?: DeviceBindingStorage
+}
+
+/**
+ * Represents a sequenced delta produced by the credential entries list.
  */
 export type CredentialEntriesDelta = Readonly<
   ['credentialEntries', SequencedArrayDelta<CredentialEntry>]
 >
 
 /**
- * Maps event names to the values exposed through `CustomEvent.detail`.
+ * Maps credential entries event names to their detail types.
  */
 export type CredentialEntriesEventMap = {
-  /** Fired when the Credential entries list changes. */
+  /** Fired when the credential entries list changes. */
   change: SequencedArrayChange<CredentialEntry>
 }
 
 /**
  * Represents an event listener for a {@link CredentialEntries} event.
  *
- * @typeParam K The event name that determines the event's `detail` type.
+ * @typeParam K The event name that determines the event detail type.
  */
 export type CredentialEntriesEventListener<
   K extends keyof CredentialEntriesEventMap,
@@ -63,8 +94,7 @@ export type CredentialEntriesEventListener<
   | { handleEvent(event: CustomEvent<CredentialEntriesEventMap[K]>): void }
 
 /**
- * Resolves a {@link CredentialEntries} event name to its corresponding typed
- * listener.
+ * Resolves an event name to its corresponding listener type.
  *
  * @typeParam K The event name to resolve.
  */
@@ -74,10 +104,10 @@ export type CredentialEntriesEventListenerFor<K extends string> =
     : EventListenerOrEventListenerObject
 
 /**
- * Maintains the ordered list of Credentially accessed objects.
+ * Maintains the database's credential entries.
  *
- * Entries are ordered from most Credentially accessed to least Credentially accessed,
- * deduplicated by identifier, and limited to 20 entries.
+ * Entries are identified by credential ID and synchronized through
+ * a sequenced array. Changes are persisted as encrypted snapshots.
  */
 export class CredentialEntries {
   private state: SequencedArray<CredentialEntry>
@@ -86,11 +116,13 @@ export class CredentialEntries {
   private eventTarget?: EventTarget
 
   /**
-   * Creates a Credential entries list.
+   * Creates a credential entries list.
    *
-   * @param id The identifier of the persisted Credential entries object.
+   * @param id The identifier of the persisted entries object.
+   * @param cipherKey The key used to encrypt the entries object.
+   * @param sessionCredentialID The credential ID of the current session.
    * @param actorID The actor identifier used by the sequenced array.
-   * @param trustedSnapshot A trusted snapshot used to initialize the state.
+   * @param trustedSnapshot An optional snapshot used to initialize the state.
    */
   constructor(
     private readonly id: string,
@@ -101,18 +133,19 @@ export class CredentialEntries {
   ) {
     try {
       this.state = new Sequenced.Array(actorID, trustedSnapshot)
-      //
+
       const debouncedDispatch = afterIdleFor(250, () => {
         void Explorer.dispatchEvent('delta', [
           'credentialEntries',
           this.deltaBuffer.splice(0),
         ])
       })
+
       void this.state.addEventListener('delta', ({ detail }) => {
         void this.deltaBuffer.push(...detail)
         void debouncedDispatch()
       })
-      //
+
       const debouncedSave = afterIdleFor(
         250,
         (snapshot: SequencedArraySnapshot<CredentialEntry>) => {
@@ -121,69 +154,148 @@ export class CredentialEntries {
           })
         }
       )
+
       void this.state.addEventListener('snapshot', ({ detail }) => {
         void debouncedSave(detail)
       })
-      //
+
       void this.state.addEventListener('change', ({ detail }) => {
         void this.dispatchEvent('change', detail)
       })
-      //
+
       const seen = new Set<string>()
-      void this.state.forEach((entry, index) => {
+
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        const entry = this.state.at(index)
+        if (!entry) continue
+
         if (seen.has(entry.id)) {
           void this.state.delete(index)
-          return
+        } else {
+          void seen.add(entry.id)
         }
-        void seen.add(entry.id)
-      })
-      //
+      }
+
       if (this.deltaBuffer.length > 0) void this.state.snapshot()
-      //
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.constructor()')
     }
   }
 
   /**
-   * Marks an entry as most Credentially accessed.
+   * Creates or updates a credential entry.
    *
-   * Any existing entry with the same identifier is removed before the new
-   * entry is inserted at the beginning of the list.
+   * Updates the credential's last-used timestamp and the corresponding
+   * user agent's last-seen timestamp. Existing properties are preserved
+   * unless replacements are provided.
    *
-   * @param accessed The entry that was accessed.
+   * @param credential The credential properties to apply.
    */
-  update(accessed: CredentialEntry): void {
+  patch(credential: CredentialPatch): void {
     try {
-      void this.state.forEach((entry, index) => {
-        if (entry.id === accessed.id) {
-          this.state.delete(index)
+      const { id, timestamp, userAgent, name, entropy, storage } = credential
+
+      if (
+        typeof id !== 'string' ||
+        typeof timestamp !== 'number' ||
+        !Number.isFinite(timestamp) ||
+        typeof userAgent !== 'string'
+      )
+        throw new Error('Invalid credential patch')
+
+      let existing: CredentialEntry | undefined
+
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        const entry = this.state.at(index)
+        if (entry?.id === id) {
+          existing = entry
+          break
         }
-      })
-
-      void this.state.unshift(accessed)
-
-      while (this.state.length > 20) {
-        void this.state.pop()
       }
+
+      if (
+        !existing &&
+        (typeof name !== 'string' ||
+          !(entropy instanceof Uint8Array) ||
+          storage === undefined)
+      )
+        throw new Error('Missing credential setup properties')
+
+      const userAgents = existing?.userAgents.map(agent => ({ ...agent })) ?? []
+      const agent = userAgents.find(agent => agent.name === userAgent)
+
+      if (agent) {
+        agent.lastSeen = Math.max(agent.lastSeen, timestamp)
+      } else {
+        userAgents.push({ name: userAgent, lastSeen: timestamp })
+      }
+
+      const entry: CredentialEntry = {
+        id,
+        name: name ?? existing!.name,
+        entropy: entropy ?? existing!.entropy,
+        storage: storage ?? existing!.storage,
+        lastUsed: Math.max(existing?.lastUsed ?? timestamp, timestamp),
+        userAgents,
+      }
+
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        if (this.state.at(index)?.id === id)
+          void this.state.delete(index)
+      }
+
+      void this.state.unshift(entry)
       void this.state.snapshot()
     } catch (cause) {
-      throw unknownError(cause, 'CredentialEntries.update()')
+      throw unknownError(cause, 'CredentialEntries.patch()')
     }
   }
+
   /**
-   * Returns the Credential entries ordered by most Credential access.
+   * Removes a credential from the database.
+   * 
+   * @param credentialID The identifier of the credential to remove.
+   */
+  destroy(credentialID: string): void {
+    try {
+      let removed = false
+
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        if (this.state.at(index)?.id !== credentialID) continue
+
+        void this.state.delete(index)
+        removed = true
+      }
+
+      if (!removed) return
+
+      void this.state.snapshot()
+      void Explorer.deleteObjectByID(credentialID)
+    } catch (cause) {
+      throw unknownError(cause, 'CredentialEntries.destroy()')
+    }
+  }
+
+  /**
+   * Returns the credential entries ordered by most recent use.
+   *
+   * Entries with equal timestamps are ordered by identifier.
    */
   values(): ReadonlyArray<Readonly<CredentialEntry>> {
     try {
-      return this.state.slice().sort()
+      return this.state
+        .slice()
+        .sort(
+          (a, b) =>
+            b.lastUsed - a.lastUsed || a.id.localeCompare(b.id)
+        )
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.values()')
     }
   }
-  //
+
   /**
-   * Applies a sequenced delta to the Credential entries list.
+   * Applies a sequenced delta to the credential entries list.
    *
    * @param delta The delta to apply.
    */
@@ -197,7 +309,7 @@ export class CredentialEntries {
   }
 
   /**
-   * Merges a snapshot into the Credential entries list.
+   * Merges a snapshot into the credential entries list.
    *
    * @param snapshot The snapshot to merge.
    */
@@ -214,9 +326,8 @@ export class CredentialEntries {
    * Registers an event listener for the specified event type.
    *
    * @param type The event type.
-   * @param listener The listener to register, or `null`.
-   * @param options An options object that specifies characteristics of the
-   * event listener.
+   * @param listener The event listener, or `null`.
+   * @param options The event listener options.
    */
   public addEventListener<K extends keyof CredentialEntriesEventMap>(
     type: K,
@@ -239,9 +350,8 @@ export class CredentialEntries {
    * {@link addEventListener}.
    *
    * @param type The event type.
-   * @param listener The listener to remove, or `null`.
-   * @param options An options object that specifies characteristics of the
-   * event listener.
+   * @param listener The event listener to remove, or `null`.
+   * @param options The event listener options.
    */
   public removeEventListener<K extends keyof CredentialEntriesEventMap>(
     type: K,
@@ -260,7 +370,7 @@ export class CredentialEntries {
   }
 
   /**
-   * Dispatches an event of the specified type to registered listeners.
+   * Dispatches an event to the registered listeners.
    *
    * @param type The event type.
    * @param detail The value exposed through `CustomEvent.detail`.

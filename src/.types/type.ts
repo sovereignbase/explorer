@@ -1,12 +1,13 @@
 import type { RecentEntriesDelta } from '../RecentEntries/class.js'
 import type { CredentialEntriesDelta } from '../CredentialEntries/class.js'
+import { DeviceBindingStorage } from '@sovereignbase/hardware-bound'
 
 export type AuthenticationResult =
   'authenticated' | 'authenticator-error' | 'invalid-data-pin'
 
 export type AuthenticationSetupParams = Readonly<{
   credentialName: string
-  setupParamas: string
+  bindingStorage: DeviceBindingStorage
 }>
 
 export type ExplorerDelta =

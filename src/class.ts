@@ -1,5 +1,5 @@
 import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
-import { loadObject, storeObject, type URLString } from '@sovereignbase/storage'
+import { deleteObject, loadObject, storeObject, type URLString } from '@sovereignbase/storage'
 import { unknownError } from './.errors/unkown.js'
 import type {
   AuthenticationResult,
@@ -11,13 +11,17 @@ import type {
   ExplorerDelta,
 } from './.types/type.js'
 import { RecentEntries } from './RecentEntries/class.js'
-import { CredentialEntries } from './CredentialEntries/class.js'
+import {
+  CredentialEntries,
+  type CredentialPatch,
+} from './CredentialEntries/class.js'
 import { Bytes } from '@sovereignbase/bytecodec'
 import {
   deriveDeviceEntropy,
   type DeviceBindingStorage,
 } from '@sovereignbase/hardware-bound'
 import { isRecord } from '@sovereignbase/utils'
+import { readableUserAgent } from '@sovereignbase/dom-utils'
 
 export class Explorer {
   public static databaseID: string
@@ -25,8 +29,8 @@ export class Explorer {
   //
   private static storageURL: URLString
   private static eventTarget?: EventTarget
-  private static sessionCredentialID: string
   private static databaseSecret: Readonly<Uint8Array>
+  private static sessionCredential: CredentialPatch = {}
 
   public static readonly cipherKeyCache: Map<string, CipherKey> = new Map()
 
@@ -44,15 +48,19 @@ export class Explorer {
     //
     const deviceEntropy = await deriveDeviceEntropy()
     if (!deviceEntropy) return 'authenticator-error'
+    const timestamp = Date.now()
+    this.sessionCredential.timestamp = timestamp
+    this.sessionCredential.userAgent = readableUserAgent()
 
     const dataPinBytes = Bytes.utf8.decode(dataPin)
     //
     const credentialSecret = await Bytes.derive(deviceEntropy, dataPinBytes, 32)
-    this.sessionCredentialID = await Cryptographic.identifier.derive(
+    const credentialID = await Cryptographic.identifier.derive(
       credentialSecret,
       Bytes.utf8.decode('@sovereignbase/exploreCredentialID'),
       32
     )
+    this.sessionCredential.id = credentialID
     const credentialCipherKey = await Cryptographic.cipherMessage.deriveKey(
       credentialSecret,
       Bytes.utf8.decode('@sovereignbase/explorer:CredentialCipherKey')
@@ -65,16 +73,20 @@ export class Explorer {
       virtualEntropy = Bytes.generate(64)
 
       void (await this.storeObjectByID(
-        this.sessionCredentialID,
+        credentialID,
         virtualEntropy,
         credentialCipherKey
       ))
+
+      this.sessionCredential.name = setupParams.credentialName
+      this.sessionCredential.entropy = deviceEntropy
+      this.sessionCredential.storage = setupParams.bindingStorage
     }
     ////////
     // LOGIN
     else {
       const result = await this.loadObjectByID(
-        this.sessionCredentialID,
+        credentialID,
         credentialCipherKey
       )
       if (!(result instanceof Uint8Array) || result.byteLength !== 64)
@@ -112,7 +124,7 @@ export class Explorer {
     )) as T
   }
 
-  public static async storeObjectByID<T>(
+  public static storeObjectByID<T>(
     id: string,
     object: T,
     cipherKey: CipherKey
@@ -127,9 +139,14 @@ export class Explorer {
     )
   }
 
+  public static deleteObjectByID(id: string) {
+    return void deleteObject((this.storageURL + id) as URLString,)  
+  }
+
   private static recentEntries?: RecentEntries
 
   public static async getRecentEntries(): Promise<RecentEntries> {
+    if (!this.isAuthenticated) throw new Error()
     if (this.recentEntries) return this.recentEntries
 
     const id = await Cryptographic.identifier.derive(
@@ -156,6 +173,7 @@ export class Explorer {
   private static credentialEntries?: CredentialEntries
 
   public static async getCredentialEntries(): Promise<CredentialEntries> {
+    if (!this.isAuthenticated) throw new Error()
     if (this.credentialEntries) return this.credentialEntries
 
     const id = await Cryptographic.identifier.derive(
@@ -177,7 +195,7 @@ export class Explorer {
     this.credentialEntries = new CredentialEntries(
       id,
       ck,
-      this.sessionCredentialID,
+      this.sessionCredential.id!,
       0,
       trustedSnapshot
     )
@@ -186,7 +204,7 @@ export class Explorer {
   }
 
   public static apply(data: unknown): void {
-    void queueMicrotask(async () => {
+    return void queueMicrotask(async () => {
       if (!this.isExplorerDelta(data)) return
       switch (data[0]) {
         case 'recentEntries': {
