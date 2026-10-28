@@ -9,6 +9,7 @@ import {
 import type { DeviceBindingStorage } from '@sovereignbase/hardware-bound'
 import { afterIdleFor, type WritableArray } from '@sovereignbase/utils'
 import { Explorer } from '../class.js'
+import { ExplorerError } from '../.errors/class.js'
 import { unknownError } from '../.errors/unkown.js'
 
 /**
@@ -43,10 +44,10 @@ export type CredentialEntry = {
 /**
  * Describes the properties used to create or update a credential entry.
  *
- * The identifier, timestamp, and user agent are required when applying
- * a patch. Additional properties are required when creating an entry.
+ * The identifier, timestamp, and user agent are required to record use.
+ * Creating a credential additionally requires a name, entropy, and storage.
  */
-export type CredentialPatch = {
+export type CredentialEvent = {
   /** The identifier of the credential. */
   id?: string
 
@@ -126,7 +127,7 @@ export class CredentialEntries {
   constructor(
     private readonly id: string,
     private readonly cipherKey: CipherKey,
-    private readonly sessionCredentialID: string,
+    public readonly sessionCredentialID: string,
     actorID: number,
     trustedSnapshot?: unknown
   ) {
@@ -147,10 +148,12 @@ export class CredentialEntries {
 
       const debouncedSave = afterIdleFor(
         250,
-        (snapshot: SequencedArraySnapshot<CredentialEntry>) => {
-          void queueMicrotask(() => {
-            void Explorer.storeObjectByID(this.id, snapshot, this.cipherKey)
-          })
+        async (snapshot: SequencedArraySnapshot<CredentialEntry>) => {
+          void (await Explorer.storeObjectByID(
+            this.id,
+            snapshot,
+            this.cipherKey
+          ))
         }
       )
 
@@ -163,19 +166,21 @@ export class CredentialEntries {
       })
 
       const seen = new Set<string>()
+      const duplicates: number[] = []
 
-      for (let index = this.state.length - 1; index >= 0; index--) {
+      for (let index = 0; index < this.state.length; index++) {
         const entry = this.state.at(index)
         if (!entry) continue
 
-        if (seen.has(entry.id)) {
-          void this.state.delete(index)
-        } else {
-          void seen.add(entry.id)
-        }
+        if (seen.has(entry.id)) duplicates.push(index)
+        else seen.add(entry.id)
       }
 
-      if (this.deltaBuffer.length > 0) void this.state.snapshot()
+      for (let index = duplicates.length - 1; index >= 0; index--)
+        void this.state.delete(duplicates[index])
+
+      if (duplicates.length > 0 || this.deltaBuffer.length > 0)
+        void this.state.snapshot()
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.constructor()')
     }
@@ -188,11 +193,19 @@ export class CredentialEntries {
    * user agent's last-seen timestamp. Existing properties are preserved
    * unless replacements are provided.
    *
-   * @param credential The credential properties to apply.
+   * @param credentialEvent The credential properties to apply.
+   * @throws {ExplorerError} If the event is invalid or setup properties are missing.
    */
-  patch(credential: CredentialPatch): void {
+  record(credentialEvent: CredentialEvent): void {
     try {
-      const { id, timestamp, userAgent, name, entropy, storage } = credential
+      if (!credentialEvent || typeof credentialEvent !== 'object')
+        throw new ExplorerError(
+          'INVALID_CREDENTIAL_EVENT',
+          'A credential event must be an object.'
+        )
+
+      const { id, timestamp, userAgent, name, entropy, storage } =
+        credentialEvent
 
       if (
         typeof id !== 'string' ||
@@ -200,7 +213,10 @@ export class CredentialEntries {
         !Number.isFinite(timestamp) ||
         typeof userAgent !== 'string'
       )
-        throw new Error('Invalid credential patch')
+        throw new ExplorerError(
+          'INVALID_CREDENTIAL_EVENT',
+          'A credential event requires an ID, a finite timestamp, and a user agent.'
+        )
 
       let existing: CredentialEntry | undefined
 
@@ -216,9 +232,12 @@ export class CredentialEntries {
         !existing &&
         (typeof name !== 'string' ||
           !(entropy instanceof Uint8Array) ||
-          storage === undefined)
+          typeof storage !== 'string')
       )
-        throw new Error('Missing credential setup properties')
+        throw new ExplorerError(
+          'MISSING_CREDENTIAL_SETUP_PROPERTIES',
+          'A new credential requires a name, entropy, and binding storage.'
+        )
 
       const userAgents =
         existing?.userAgents.map((agent) => ({ ...agent })) ?? []
@@ -246,32 +265,39 @@ export class CredentialEntries {
       void this.state.unshift(entry)
       void this.state.snapshot()
     } catch (cause) {
-      throw unknownError(cause, 'CredentialEntries.patch()')
+      throw unknownError(cause, 'CredentialEntries.record()')
     }
   }
 
   /**
-   * Removes a credential from the database.
+   * Revokes a credential by deleting its persisted data and list entries.
    *
-   * @param credentialID The identifier of the credential to remove.
+   * The list remains unchanged if deletion of the persisted credential fails.
+   *
+   * @param credentialID The identifier of the credential to revoke.
    */
-  destroy(credentialID: string): void {
+  async revoke(credentialID: string): Promise<void> {
     try {
-      let removed = false
+      let exists = false
 
       for (let index = this.state.length - 1; index >= 0; index--) {
         if (this.state.at(index)?.id !== credentialID) continue
-
-        void this.state.delete(index)
-        removed = true
+        exists = true
+        break
       }
 
-      if (!removed) return
+      if (!exists) return
+
+      await Explorer.deleteObjectByID(credentialID)
+
+      for (let index = this.state.length - 1; index >= 0; index--) {
+        if (this.state.at(index)?.id === credentialID)
+          void this.state.delete(index)
+      }
 
       void this.state.snapshot()
-      void Explorer.deleteObjectByID(credentialID)
     } catch (cause) {
-      throw unknownError(cause, 'CredentialEntries.destroy()')
+      throw unknownError(cause, 'CredentialEntries.revoke()')
     }
   }
 
@@ -280,13 +306,13 @@ export class CredentialEntries {
    *
    * Entries with equal timestamps are ordered by identifier.
    */
-  values(): ReadonlyArray<Readonly<CredentialEntry>> {
+  public list(): ReadonlyArray<Readonly<CredentialEntry>> {
     try {
       return this.state
         .slice()
         .sort((a, b) => b.lastUsed - a.lastUsed || a.id.localeCompare(b.id))
     } catch (cause) {
-      throw unknownError(cause, 'CredentialEntries.values()')
+      throw unknownError(cause, 'CredentialEntries.list()')
     }
   }
 
@@ -295,7 +321,7 @@ export class CredentialEntries {
    *
    * @param delta The delta to apply.
    */
-  apply(delta: unknown): void {
+  public apply(delta: unknown): void {
     try {
       void this.state.apply(delta)
       void this.state.snapshot()
@@ -309,7 +335,7 @@ export class CredentialEntries {
    *
    * @param snapshot The snapshot to merge.
    */
-  merge(snapshot: unknown): void {
+  public merge(snapshot: unknown): void {
     try {
       void this.state.merge(snapshot)
       void this.state.snapshot()
@@ -317,6 +343,13 @@ export class CredentialEntries {
       throw unknownError(cause, 'CredentialEntries.merge()')
     }
   }
+
+  //* ███████╗██╗   ██╗███████╗███╗   ██╗████████╗   ████████╗ █████╗ ██████╗  ██████╗ ███████╗████████╗
+  //* ██╔════╝██║   ██║██╔════╝████╗  ██║╚══██╔══╝   ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝
+  //* █████╗  ██║   ██║█████╗  ██╔██╗ ██║   ██║         ██║   ███████║██████╔╝██║  ███╗█████╗     ██║
+  //* ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║   ██║         ██║   ██╔══██║██╔══██╗██║   ██║██╔══╝     ██║
+  //* ███████╗ ╚████╔╝ ███████╗██║ ╚████║   ██║         ██║   ██║  ██║██║  ██║╚██████╔╝███████╗   ██║
+  //* ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝
 
   /**
    * Registers an event listener for the specified event type.
