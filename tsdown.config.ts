@@ -19,7 +19,7 @@ const apache2Banner = [
 ].join('\n')
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/class.ts'],
   format: ['esm', 'cjs'],
   outDir: 'dist',
   platform: 'neutral',
@@ -30,8 +30,7 @@ export default defineConfig({
   banner: {
     js: `${apache2Banner}\n`,
   },
-  external: [],
-  outExtension({ format }) {
+  outExtensions({ format }) {
     return { js: format === 'cjs' ? '.cjs' : '.js' }
   },
 })
