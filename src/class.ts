@@ -156,6 +156,8 @@ export class Explorer {
       void (await this.loadCredentialEntries()).record(this.sessionCredential)
       delete this.sessionCredential
 
+      void this.dispatchEvent('authenticated', true)
+
       return 'authenticated'
     } catch (cause) {
       throw unknownError(cause, 'Explorer.authenticate()')
