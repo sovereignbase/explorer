@@ -542,3 +542,7 @@ export class Explorer {
     }
   }
 }
+
+export { ExplorerError, type ExplorerErrorCode } from './.errors/class.js'
+
+export * from './.types/type.js'

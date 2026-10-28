@@ -8,15 +8,15 @@
     "typescript",
     "sovereignbase"
   ],
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/class.cjs",
+  "module": "./dist/class.js",
+  "types": "./dist/class.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "default": "./dist/index.js"
+      "types": "./dist/class.d.ts",
+      "import": "./dist/class.js",
+      "require": "./dist/class.cjs",
+      "default": "./dist/class.js"
     },
     "./package.json": "./package.json"
   },
