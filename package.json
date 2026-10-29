@@ -2,7 +2,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "name": "@sovereignbase/explorer",
-  "version": "0.0.0-alpha.4",
+  "version": "0.0.0-alpha.5",
   "description": "WIP",
   "keywords": [
     "typescript",
@@ -36,7 +36,8 @@
     "test:vitest": "vitest run --coverage",
     "test:e2e": "playwright test",
     "bench": "npm run build && node benchmark/bench.js",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepublishOnly": "npm run build:package"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
