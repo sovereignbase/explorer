@@ -7,7 +7,10 @@ import {
 } from '@sovereignbase/sequenced'
 //
 import type { CipherKey } from '@sovereignbase/cryptosuite'
-import type { DeviceBindingStorage } from '@sovereignbase/hardware-bound'
+import {
+  invalidateDeviceBinding,
+  type DeviceBindingStorage,
+} from '@sovereignbase/hardware-bound'
 //
 import {
   afterIdleFor,
@@ -23,17 +26,20 @@ import { unknownError } from '../.errors/unkown.js'
  * Describes a credential registered with the database.
  */
 export type CredentialEntry = {
-  /** The identifier of the credential. */
-  id: string
-
   /** The display name of the credential. */
   name: string
 
   /** The entropy associated with the credential. */
   entropy: Uint8Array
 
-  /** The storage mechanism used for device binding. */
+  /** The storage characteristics of the device binding. */
   storage: DeviceBindingStorage
+
+  /** The identifier of the object storing virtual entropy protected by the credential. */
+  objectID: string
+
+  /** The WebAuthn credential identifier. */
+  credentialID: string
 
   /** The timestamp of the most recent use of the credential. */
   lastUsed: number
@@ -51,12 +57,16 @@ export type CredentialEntry = {
 /**
  * Describes the properties used to create or update a credential entry.
  *
- * The identifier, timestamp, and user agent are required to record use.
- * Creating a credential additionally requires a name, entropy, and storage.
+ * The object identifier, timestamp, and user agent are required to record use.
+ * Creating an entry additionally requires the credential identifier,
+ * display name, entropy, and storage characteristics.
  */
 export type CredentialEvent = {
-  /** The identifier of the credential. */
-  id?: string
+  /** The identifier of the object storing the credential's virtual entropy. */
+  objectID?: string
+
+  /** The WebAuthn credential identifier. */
+  credentialID?: string
 
   /** The timestamp of the credential use. */
   timestamp?: number
@@ -70,7 +80,7 @@ export type CredentialEvent = {
   /** The entropy associated with the credential. */
   entropy?: Uint8Array
 
-  /** The storage mechanism used for device binding. */
+  /** The storage characteristics of the device binding. */
   storage?: DeviceBindingStorage
 }
 
@@ -118,10 +128,11 @@ export type CredentialEntriesEventListenerFor<K extends string> =
     : EventListenerOrEventListenerObject
 
 /**
- * Maintains the database's credential entries.
+ * Maintains the database's registered credentials.
  *
- * Entries are identified by credential ID and synchronized through
- * a sequenced array. Changes are persisted as encrypted snapshots.
+ * Entries are identified by their object and credential identifiers.
+ * Changes are synchronized through a sequenced array and persisted
+ * as encrypted snapshots.
  */
 export class CredentialEntries {
   private state: SequencedArray<CredentialEntry>
@@ -134,7 +145,7 @@ export class CredentialEntries {
    *
    * @param id The identifier of the persisted entries object.
    * @param cipherKey The key used to encrypt the entries object.
-   * @param sessionCredentialID The credential ID of the current session.
+   * @param sessionCredentialID The WebAuthn credential ID of the current session.
    * @param actorID The actor identifier used by the sequenced array.
    * @param trustedSnapshot An optional snapshot used to initialize the state.
    */
@@ -179,15 +190,23 @@ export class CredentialEntries {
         void this.dispatchEvent('change', detail)
       })
 
-      const seen = new Set<string>()
+      const seenObjects = new Set<string>()
+      const seenCredentials = new Set<string>()
       const duplicates: number[] = []
 
       for (let index = 0; index < this.state.length; index++) {
         const entry = this.state.at(index)
         if (!entry) continue
 
-        if (seen.has(entry.id)) duplicates.push(index)
-        else seen.add(entry.id)
+        if (
+          seenObjects.has(entry.objectID) ||
+          seenCredentials.has(entry.credentialID)
+        ) {
+          duplicates.push(index)
+        } else {
+          seenObjects.add(entry.objectID)
+          seenCredentials.add(entry.credentialID)
+        }
       }
 
       for (let index = duplicates.length - 1; index >= 0; index--)
@@ -218,25 +237,36 @@ export class CredentialEntries {
           'A credential event must be an object.'
         )
 
-      const { id, timestamp, userAgent, name, entropy, storage } =
-        credentialEvent
+      const {
+        objectID,
+        credentialID,
+        timestamp,
+        userAgent,
+        name,
+        entropy,
+        storage,
+      } = credentialEvent
 
       if (
-        typeof id !== 'string' ||
+        typeof objectID !== 'string' ||
         typeof timestamp !== 'number' ||
         !Number.isFinite(timestamp) ||
         typeof userAgent !== 'string'
       )
         throw new ExplorerError(
           'INVALID_CREDENTIAL_EVENT',
-          'A credential event requires an ID, a finite timestamp, and a user agent.'
+          'A credential event requires an object ID, a finite timestamp, and a user agent.'
         )
 
       let existing: CredentialEntry | undefined
 
       for (let index = this.state.length - 1; index >= 0; index--) {
         const entry = this.state.at(index)
-        if (entry?.id === id) {
+
+        if (
+          entry?.objectID === objectID ||
+          (credentialID !== undefined && entry?.credentialID === credentialID)
+        ) {
           existing = entry
           break
         }
@@ -244,17 +274,19 @@ export class CredentialEntries {
 
       if (
         !existing &&
-        (typeof name !== 'string' ||
+        (typeof credentialID !== 'string' ||
+          typeof name !== 'string' ||
           !(entropy instanceof Uint8Array) ||
           typeof storage !== 'string')
       )
         throw new ExplorerError(
           'MISSING_CREDENTIAL_SETUP_PROPERTIES',
-          'A new credential requires a name, entropy, and binding storage.'
+          'A new credential requires a credential ID, name, entropy, and binding storage.'
         )
 
       const userAgents =
         existing?.userAgents.map((agent) => ({ ...agent })) ?? []
+
       const agent = userAgents.find((agent) => agent.name === userAgent)
 
       if (agent) {
@@ -264,7 +296,8 @@ export class CredentialEntries {
       }
 
       const entry: CredentialEntry = {
-        id,
+        objectID,
+        credentialID: credentialID ?? existing!.credentialID,
         name: name ?? existing!.name,
         entropy: entropy ?? existing!.entropy,
         storage: storage ?? existing!.storage,
@@ -273,7 +306,13 @@ export class CredentialEntries {
       }
 
       for (let index = this.state.length - 1; index >= 0; index--) {
-        if (this.state.at(index)?.id === id) void this.state.delete(index)
+        const current = this.state.at(index)
+
+        if (
+          current?.objectID === entry.objectID ||
+          current?.credentialID === entry.credentialID
+        )
+          void this.state.delete(index)
       }
 
       void this.state.unshift(entry)
@@ -284,32 +323,45 @@ export class CredentialEntries {
   }
 
   /**
-   * Revokes a credential by deleting its persisted data and list entries.
+   * Revokes a credential and removes its registered entries.
    *
-   * The list remains unchanged if deletion of the persisted credential fails.
+   * Deletes the credential's persisted objects before removing its entries.
+   * The entries remain unchanged if deletion fails. Credential invalidation
+   * is requested on a best-effort basis after successful removal.
    *
-   * @param credentialID The identifier of the credential to revoke.
+   * @param credentialID The WebAuthn credential identifier to revoke.
    */
   public async revoke(credentialID: string): Promise<void> {
     try {
-      let exists = false
+      const objectIDs = new Set<string>()
 
       for (let index = this.state.length - 1; index >= 0; index--) {
-        if (this.state.at(index)?.id !== credentialID) continue
-        exists = true
-        break
+        const entry = this.state.at(index)
+
+        if (entry?.credentialID === credentialID) objectIDs.add(entry.objectID)
       }
 
-      if (!exists) return
+      if (objectIDs.size === 0) return
 
-      await Explorer.deleteObjectByID(credentialID)
+      for (const objectID of objectIDs)
+        await Explorer.deleteObjectByID(objectID)
+
+      let removed = false
 
       for (let index = this.state.length - 1; index >= 0; index--) {
-        if (this.state.at(index)?.id === credentialID)
+        if (this.state.at(index)?.credentialID === credentialID) {
           void this.state.delete(index)
+          removed = true
+        }
       }
 
-      void this.state.snapshot()
+      if (removed) void this.state.snapshot()
+
+      try {
+        await invalidateDeviceBinding(credentialID)
+      } catch {
+        // Credential invalidation is best-effort.
+      }
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.revoke()')
     }
@@ -318,13 +370,17 @@ export class CredentialEntries {
   /**
    * Returns the credential entries ordered by most recent use.
    *
-   * Entries with equal timestamps are ordered by identifier.
+   * Entries with equal timestamps are ordered by credential identifier.
    */
   public list(): DeepReadonly<Array<CredentialEntry>> {
     try {
       return this.state
         .slice()
-        .sort((a, b) => b.lastUsed - a.lastUsed || a.id.localeCompare(b.id))
+        .sort(
+          (a, b) =>
+            b.lastUsed - a.lastUsed ||
+            a.credentialID.localeCompare(b.credentialID)
+        )
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.list()')
     }
@@ -357,13 +413,6 @@ export class CredentialEntries {
       throw unknownError(cause, 'CredentialEntries.merge()')
     }
   }
-
-  //* ███████╗██╗   ██╗███████╗███╗   ██╗████████╗   ████████╗ █████╗ ██████╗  ██████╗ ███████╗████████╗
-  //* ██╔════╝██║   ██║██╔════╝████╗  ██║╚══██╔══╝   ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝
-  //* █████╗  ██║   ██║█████╗  ██╔██╗ ██║   ██║         ██║   ███████║██████╔╝██║  ███╗█████╗     ██║
-  //* ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║   ██║         ██║   ██╔══██║██╔══██╗██║   ██║██╔══╝     ██║
-  //* ███████╗ ╚████╔╝ ███████╗██║ ╚████║   ██║         ██║   ██║  ██║██║  ██║╚██████╔╝███████╗   ██║
-  //* ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝
 
   /**
    * Registers an event listener for the specified event type.

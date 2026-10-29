@@ -7,7 +7,7 @@ import {
 import { isRecord, type DeepReadonly } from '@sovereignbase/utils'
 import { Bytes } from '@sovereignbase/bytecodec'
 import { readableUserAgent } from '@sovereignbase/dom-utils'
-import { deriveDeviceEntropy } from '@sovereignbase/hardware-bound'
+import { accessDeviceBinding } from '@sovereignbase/hardware-bound'
 import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
 //
 import type {
@@ -86,8 +86,9 @@ export class Explorer {
     try {
       this.storageURL = storageURL
       //
-      const deviceEntropy = await deriveDeviceEntropy()
-      if (!deviceEntropy) return 'authenticator-error'
+      const deviceBinding = await accessDeviceBinding()
+      if (!Array.isArray(deviceBinding)) return 'authenticator-error'
+      const [credentialID, deviceEntropy] = deviceBinding
       //
       this.sessionCredential = {
         timestamp: Date.now(),
@@ -102,12 +103,13 @@ export class Explorer {
         32
       )
       //
-      const credentialID = await Cryptographic.identifier.derive(
+      const credentialObjectID = await Cryptographic.identifier.derive(
         credentialSecret,
-        Bytes.utf8.decode('@sovereignbase/explorer:CredentialID'),
+        Bytes.utf8.decode('@sovereignbase/explorer:CredentialObjectID'),
         32
       )
-      this.sessionCredential.id = credentialID
+      this.sessionCredential.objectID = credentialObjectID
+      this.sessionCredential.credentialID = credentialID
       //
       const credentialCipherKey = await Cryptographic.cipherMessage.deriveKey(
         credentialSecret,
@@ -121,7 +123,7 @@ export class Explorer {
         virtualEntropy = Bytes.generate(64)
 
         void (await this.storeObjectByID(
-          credentialID,
+          credentialObjectID,
           virtualEntropy,
           credentialCipherKey
         ))
@@ -134,7 +136,7 @@ export class Explorer {
       // LOGIN
       else {
         const result = await this.loadObjectByID(
-          credentialID,
+          credentialObjectID,
           credentialCipherKey
         )
         if (!(result instanceof Uint8Array) || result.byteLength !== 64)
@@ -531,7 +533,7 @@ export class Explorer {
       this.credentialEntries = new CredentialEntries(
         id,
         ck,
-        this.sessionCredential!.id!,
+        this.sessionCredential!.credentialID!,
         0,
         trustedSnapshot
       )
