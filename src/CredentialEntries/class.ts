@@ -362,6 +362,10 @@ export class CredentialEntries {
       } catch {
         // Credential invalidation is best-effort.
       }
+
+      // Log out.
+      if (credentialID === this.sessionCredentialID)
+        void window.location.reload()
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.revoke()')
     }

@@ -7,8 +7,18 @@ import {
 import { isRecord, type DeepReadonly } from '@sovereignbase/utils'
 import { Bytes } from '@sovereignbase/bytecodec'
 import { readableUserAgent } from '@sovereignbase/dom-utils'
-import { accessDeviceBinding } from '@sovereignbase/hardware-bound'
-import { Cryptographic, type CipherKey } from '@sovereignbase/cryptosuite'
+import {
+  accessDeviceBinding,
+  createDeviceBinding,
+} from '@sovereignbase/hardware-bound'
+import {
+  Cryptographic,
+  type DecapsulateKey,
+  type EncapsulateKey,
+  type KeyOffer,
+  type CipherKey,
+  type CipherMessage,
+} from '@sovereignbase/cryptosuite'
 //
 import type {
   AuthenticationResult,
@@ -37,23 +47,34 @@ import {
 } from './RecentEntries/class.js'
 
 /**
- * Provides authentication, encrypted object storage, and access to
- * the database's synchronized entries.
+ * Provides access to an authenticated Sovereignbase database.
  *
- * Maintains the authenticated database context and exposes static methods
- * for managing stored objects, observing entries, and applying remote deltas.
+ * Manages database authentication, encrypted object storage, credential
+ * registration, database linking, and synchronized entries.
  */
 export class Explorer {
   /** The identifier of the authenticated database. */
   public static databaseID: string
 
-  /** Indicates whether the database has been authenticated. */
+  /** Indicates whether a database has been authenticated. */
   public static isAuthenticated: boolean
 
-  //
+  /** The base URL used to access database objects. */
   private static storageURL: URLString
+
+  /** The event target used for Explorer events. */
   private static eventTarget?: EventTarget
+
+  /** The data PIN associated with the current session. */
+  private static dataPIN: string
+
+  /** The virtual entropy associated with the authenticated database. */
+  private static virtualEntropy: Readonly<Uint8Array>
+
+  /** The secret used to access the authenticated database. */
   private static databaseSecret: Readonly<Uint8Array>
+
+  /** The credential information associated with the current authentication. */
   private static sessionCredential?: CredentialEvent = {}
 
   /**
@@ -65,28 +86,32 @@ export class Explorer {
   public static readonly cipherKeyCache: Map<string, CipherKey> = new Map()
 
   /**
-   * Authenticates a database using a data PIN and device-bound entropy.
+   * Authenticates a database using a data PIN and an existing device binding.
    *
-   * Derives the credential and database identifiers from cryptographic
-   * secrets. When setup parameters are provided, creates and stores a
-   * new credential. Otherwise, loads the existing credential.
+   * Establishes the authenticated database context and records the credential
+   * used for authentication.
    *
-   * Records the authenticated credential in the database's credential list.
+   * When setup parameters are provided, registers a credential using the
+   * supplied virtual entropy or generates new virtual entropy.
    *
-   * @param dataPIN The PIN used to derive the credential and database secrets.
-   * @param storageURL The base URL used to access persisted database objects.
-   * @param setupParams Optional parameters for creating a new credential.
+   * @param dataPIN The PIN associated with the database.
+   * @param storageURL The base URL used to access database objects.
+   * @param setupParams Optional parameters for registering a credential.
+   *
+   * @param credentialId An optional credential identifier used to restrict credential selection.
    * @returns The authentication result.
    */
   public static async authenticate(
     dataPIN: string,
     storageURL: URLString,
-    setupParams?: AuthenticationSetupParams
+    setupParams?: AuthenticationSetupParams,
+    credentialId?: string
   ): Promise<AuthenticationResult> {
     try {
+      this.dataPIN = dataPIN
       this.storageURL = storageURL
       //
-      const deviceBinding = await accessDeviceBinding()
+      const deviceBinding = await accessDeviceBinding(credentialId)
       if (!Array.isArray(deviceBinding)) return 'authenticator-error'
       const [credentialID, deviceEntropy] = deviceBinding
       //
@@ -116,15 +141,17 @@ export class Explorer {
         Bytes.utf8.decode('@sovereignbase/explorer:CredentialCipherKey')
       )
       //
-      let virtualEntropy: Uint8Array
       ////////
       // SETUP
       if (isRecord(setupParams)) {
-        virtualEntropy = Bytes.generate(64)
+        this.virtualEntropy =
+          setupParams.virtualEntropy instanceof Uint8Array
+            ? setupParams.virtualEntropy
+            : Bytes.generate(64)
 
         void (await this.storeObjectByID(
           credentialObjectID,
-          virtualEntropy,
+          this.virtualEntropy,
           credentialCipherKey
         ))
 
@@ -142,10 +169,14 @@ export class Explorer {
         if (!(result instanceof Uint8Array) || result.byteLength !== 64)
           return 'invalid-data-pin'
 
-        virtualEntropy = result
+        this.virtualEntropy = result
       }
       //
-      this.databaseSecret = await Bytes.derive(virtualEntropy, dataPINBytes, 64)
+      this.databaseSecret = await Bytes.derive(
+        this.virtualEntropy,
+        dataPINBytes,
+        64
+      )
 
       this.databaseID = await Cryptographic.identifier.derive(
         this.databaseSecret,
@@ -166,10 +197,108 @@ export class Explorer {
     }
   }
 
+  /** The number of consecutive failed database linking PIN attempts. */
+  private static failCounter: number = 0
+
   /**
-   * Permanently revokes a credential and deletes its persisted data.
+   * Prepares an authenticated database for linking to another device.
    *
-   * Removes the credential from the database's registered credentials.
+   * Verifies the current data PIN and prepares an encrypted transfer
+   * containing the information required to access the same database.
+   *
+   * Repeated PIN failures cause the current page to reload.
+   *
+   * @param dataPIN The PIN associated with the authenticated database.
+   * @param encapsulateKey The key used to establish encryption for the transfer.
+   * @returns The key offer and encrypted transfer message, or `false`
+   * if the supplied PIN is incorrect.
+   */
+  public static async prepareDatabaseLink(
+    dataPIN: string,
+    encapsulateKey: EncapsulateKey
+  ): Promise<[keyOffer: KeyOffer, cipherMessage: CipherMessage] | false> {
+    try {
+      if (!this.isAuthenticated) throw new ExplorerError('NOT_AUTHENTICATED')
+
+      if (dataPIN !== this.dataPIN) {
+        if (this.failCounter >= 2) void window.location.reload() // log out
+        this.failCounter++
+        return false
+      }
+
+      this.failCounter = 0
+
+      const { keyOffer, cipherKey } =
+        await Cryptographic.keyAgreement.encapsulate(encapsulateKey)
+
+      const cipherMessage = await Cryptographic.cipherMessage.encrypt(
+        cipherKey,
+        Bytes.concat([this.virtualEntropy, Bytes.utf8.decode(dataPIN)])
+      )
+
+      return [keyOffer, cipherMessage]
+    } catch (cause) {
+      throw unknownError(cause, 'Explorer.prepareDatabaseLink()')
+    }
+  }
+
+  /**
+   * Links the current device to an existing database.
+   *
+   * Accesses the transferred database information, creates a device binding,
+   * and registers a credential for the existing database.
+   *
+   * @param keyOffer The key offer associated with the database link.
+   * @param cipherMessage The encrypted database linking message.
+   * @param decapsulateKey The key used to establish decryption for the transfer.
+   * @param credentialName The display name assigned to the new credential.
+   * @param storageURL The base URL used to access database objects.
+   * @returns `true` if the database was linked and authenticated;
+   * otherwise, `false`.
+   */
+  public static async linkToDatabase(
+    keyOffer: KeyOffer,
+    cipherMessage: CipherMessage,
+    decapsulateKey: DecapsulateKey,
+    credentialName: string,
+    storageURL: URLString
+  ): Promise<boolean> {
+    try {
+      const { cipherKey } = await Cryptographic.keyAgreement.decapsulate(
+        keyOffer,
+        decapsulateKey
+      )
+      const raw = await Cryptographic.cipherMessage.decrypt(
+        cipherKey,
+        cipherMessage
+      )
+
+      const setupResult = await createDeviceBinding(credentialName)
+      if (!Array.isArray(setupResult)) return false
+      const [credentialId, bindingStorage] = setupResult
+
+      const result = await this.authenticate(
+        Bytes.utf8.encode(raw.slice(64)),
+        storageURL,
+        {
+          credentialName,
+          virtualEntropy: raw.slice(0, 64),
+          bindingStorage,
+        },
+        credentialId
+      )
+
+      return result === 'authenticated' ? true : false
+    } catch (cause) {
+      throw unknownError(cause, 'Explorer.linkToDatabase()')
+    }
+  }
+
+  /**
+   * Permanently revokes a registered database credential.
+   *
+   * Removes the credential's persisted data and registration from
+   * the authenticated database.
    *
    * @param credentialID The identifier of the credential to revoke.
    * @throws {ExplorerError} If the database is not authenticated.
@@ -187,15 +316,14 @@ export class Explorer {
   }
 
   /**
-   * Returns the registered credentials and optionally observes their changes.
+   * Returns the registered database credentials.
    *
-   * The returned tuple contains a cleanup function, the current credential
-   * entries, and the identifier of the current session's credential.
-   *
-   * The cleanup function removes the registered change listener, if any.
+   * Optionally registers a listener for changes to the credential entries.
+   * The returned cleanup function removes the registered listener.
    *
    * @param onChange An optional callback invoked when the entries change.
-   * @returns The cleanup function, credential entries, and session credential ID.
+   * @returns The cleanup function, credential entries, and identifier
+   * of the current session's credential.
    * @throws {ExplorerError} If the database is not authenticated.
    */
   public static async listCredentialEntries(
@@ -230,11 +358,10 @@ export class Explorer {
   }
 
   /**
-   * Returns the recently accessed objects and optionally observes their changes.
+   * Returns the recently accessed database objects.
    *
-   * The returned tuple contains a cleanup function and the current recent
-   * entries. The cleanup function removes the registered change listener,
-   * if any.
+   * Optionally registers a listener for changes to the recent entries.
+   * The returned cleanup function removes the registered listener.
    *
    * @param onChange An optional callback invoked when the entries change.
    * @returns The cleanup function and recent entries.
@@ -264,9 +391,9 @@ export class Explorer {
   }
 
   /**
-   * Loads an encrypted object using its identifier and cipher key.
+   * Loads an encrypted database object by its identifier.
    *
-   * Caches the cipher key if the identifier has not been encountered before.
+   * Caches the supplied cipher key if no key has been cached for the object.
    *
    * @typeParam T The expected type of the loaded object.
    * @param id The identifier of the object to load.
@@ -295,9 +422,9 @@ export class Explorer {
   }
 
   /**
-   * Encrypts and stores an object using its identifier and cipher key.
+   * Encrypts and stores a database object by its identifier.
    *
-   * Caches the cipher key if the identifier has not been encountered before.
+   * Caches the supplied cipher key if no key has been cached for the object.
    *
    * @typeParam T The type of the object to store.
    * @param id The identifier of the object to store.
@@ -324,7 +451,9 @@ export class Explorer {
   }
 
   /**
-   * Deletes a persisted object using its identifier.
+   * Deletes a database object by its identifier.
+   *
+   * Removes the persisted object and its corresponding recent entry.
    *
    * @param id The identifier of the object to delete.
    */
@@ -376,8 +505,9 @@ export class Explorer {
   //* ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝
 
   /**
-   * Registers an event listener for the specified event type.
+   * Registers an event listener for the specified Explorer event.
    *
+   * @typeParam K The event name that determines the event detail type.
    * @param type The event type.
    * @param listener The event listener, or `null`.
    * @param options The event listener options.
@@ -402,6 +532,7 @@ export class Explorer {
    * Removes an event listener previously registered with
    * {@link addEventListener}.
    *
+   * @typeParam K The event name that determines the listener type.
    * @param type The event type.
    * @param listener The event listener to remove, or `null`.
    * @param options The event listener options.
@@ -423,8 +554,9 @@ export class Explorer {
   }
 
   /**
-   * Dispatches an event to the registered listeners.
+   * Dispatches an Explorer event to registered listeners.
    *
+   * @typeParam K The event name that determines the event detail type.
    * @param type The event type.
    * @param detail The value exposed through `CustomEvent.detail`.
    */
@@ -456,6 +588,7 @@ export class Explorer {
     return Array.isArray(data) && typeof data[0] === 'string'
   }
 
+  /** The cached recent entries list. */
   private static recentEntries?: RecentEntries
 
   /**
@@ -497,6 +630,7 @@ export class Explorer {
     }
   }
 
+  /** The cached credential entries list. */
   private static credentialEntries?: CredentialEntries
 
   /**

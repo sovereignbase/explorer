@@ -20,6 +20,9 @@ export type AuthenticationSetupParams = Readonly<{
   /** The display name assigned to the credential. */
   credentialName: string
 
+  /** Optional virtual entropy used to establish an existing database. */
+  virtualEntropy?: Uint8Array
+
   /** The storage mechanism used to bind the credential to the device. */
   bindingStorage: DeviceBindingStorage
 }>
