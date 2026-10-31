@@ -144,14 +144,12 @@ export class CredentialEntries {
    * Creates a credential entries list.
    *
    * @param id The identifier of the persisted entries object.
-   * @param cipherKey The key used to encrypt the entries object.
    * @param sessionCredentialID The WebAuthn credential ID of the current session.
    * @param actorID The actor identifier used by the sequenced array.
    * @param trustedSnapshot An optional snapshot used to initialize the state.
    */
   constructor(
     private readonly id: string,
-    private readonly cipherKey: CipherKey,
     public readonly sessionCredentialID: string,
     actorID: number,
     trustedSnapshot?: unknown
@@ -177,7 +175,7 @@ export class CredentialEntries {
           void (await Explorer.storeObjectByID(
             this.id,
             snapshot,
-            this.cipherKey
+            Explorer.cipherKeyCache.get(this.id)!
           ))
         }
       )

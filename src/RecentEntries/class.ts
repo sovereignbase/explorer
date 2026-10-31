@@ -91,13 +91,11 @@ export class RecentEntries {
    * Creates a recent entries list.
    *
    * @param id The identifier of the persisted recent entries object.
-   * @param cipherKey The key used to encrypt the entries object.
    * @param actorID The actor identifier used by the sequenced array.
    * @param trustedSnapshot An optional snapshot used to initialize the state.
    */
   constructor(
     private readonly id: string,
-    private readonly cipherKey: CipherKey,
     actorID: number,
     trustedSnapshot?: unknown
   ) {
@@ -121,7 +119,7 @@ export class RecentEntries {
           void (await Explorer.storeObjectByID(
             this.id,
             snapshot,
-            this.cipherKey
+            Explorer.cipherKeyCache.get(this.id)!
           ))
         }
       )

@@ -136,9 +136,9 @@ export class Explorer {
       this.sessionCredential.objectID = credentialObjectID
       this.sessionCredential.credentialID = credentialID
       //
-      const credentialCipherKey = await Cryptographic.cipherMessage.deriveKey(
+      const credentialObjectCK = await Cryptographic.cipherMessage.deriveKey(
         credentialSecret,
-        Bytes.utf8.decode('@sovereignbase/explorer:CredentialCipherKey')
+        Bytes.utf8.decode('@sovereignbase/explorer:CredentialObjectCK')
       )
       //
       ////////
@@ -152,7 +152,7 @@ export class Explorer {
         void (await this.storeObjectByID(
           credentialObjectID,
           this.virtualEntropy,
-          credentialCipherKey
+          credentialObjectCK
         ))
 
         this.sessionCredential.name = setupParams.credentialName
@@ -164,7 +164,7 @@ export class Explorer {
       else {
         const result = await this.loadObjectByID(
           credentialObjectID,
-          credentialCipherKey
+          credentialObjectCK
         )
         if (!(result instanceof Uint8Array) || result.byteLength !== 64)
           return 'invalid-data-pin'
@@ -183,6 +183,13 @@ export class Explorer {
         Bytes.utf8.decode('@sovereignbase/explorer:DatabaseID'),
         32
       )
+
+      const databaseCipherKey = await Cryptographic.cipherMessage.deriveKey(
+        this.databaseSecret,
+        Bytes.utf8.decode('@sovereignbase/explorer:DatabaseCK')
+      )
+
+      void this.cipherKeyCache.set(this.databaseID, databaseCipherKey)
 
       this.isAuthenticated = true
 
@@ -622,7 +629,7 @@ export class Explorer {
         (snapshot) => void this.recentEntries!.merge(snapshot)
       )
 
-      this.recentEntries = new RecentEntries(id, ck, 0, trustedSnapshot)
+      this.recentEntries = new RecentEntries(id, 0, trustedSnapshot)
 
       return this.recentEntries
     } catch (cause) {
@@ -666,7 +673,6 @@ export class Explorer {
 
       this.credentialEntries = new CredentialEntries(
         id,
-        ck,
         this.sessionCredential!.credentialID!,
         0,
         trustedSnapshot
