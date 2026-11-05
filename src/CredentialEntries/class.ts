@@ -202,9 +202,24 @@ export class CredentialEntries {
         if (object !== undefined || credential !== undefined) {
           duplicates.push(index)
 
-          if (object !== undefined) retainedDuplicates.add(object)
+          for (const retainedIndex of new Set([object, credential])) {
+            if (retainedIndex === undefined) continue
 
-          if (credential !== undefined) retainedDuplicates.add(credential)
+            const retained = this.state.at(retainedIndex)!
+            retained.lastUsed = Math.max(retained.lastUsed, entry.lastUsed)
+
+            for (const ua of entry.userAgents) {
+              const existing = retained.userAgents.find(
+                (agent) => agent.name === ua.name
+              )
+
+              if (existing)
+                existing.lastSeen = Math.max(existing.lastSeen, ua.lastSeen)
+              else retained.userAgents.push({ ...ua })
+            }
+
+            retainedDuplicates.add(retainedIndex)
+          }
         } else {
           seenObjects.set(entry.objectID, index)
           seenCredentials.set(entry.credentialID, index)
@@ -264,16 +279,25 @@ export class CredentialEntries {
         )
 
       let existing: CredentialEntry | undefined
+      const userAgents: CredentialEntry['userAgents'] = []
 
       for (let index = this.state.length - 1; index >= 0; index--) {
         const entry = this.state.at(index)
 
         if (
-          entry?.objectID === objectID ||
-          (credentialID !== undefined && entry?.credentialID === credentialID)
-        ) {
-          existing = entry
-          break
+          !entry ||
+          (entry.objectID !== objectID &&
+            (credentialID === undefined || entry.credentialID !== credentialID))
+        )
+          continue
+
+        if (!existing || entry.lastUsed > existing.lastUsed) existing = entry
+
+        for (const ua of entry.userAgents) {
+          const known = userAgents.find((agent) => agent.name === ua.name)
+
+          if (known) known.lastSeen = Math.max(known.lastSeen, ua.lastSeen)
+          else userAgents.push({ ...ua })
         }
       }
 
@@ -289,16 +313,10 @@ export class CredentialEntries {
           'A new credential requires a credential ID, name, entropy, and binding storage.'
         )
 
-      const userAgents =
-        existing?.userAgents.map((agent) => ({ ...agent })) ?? []
-
       const agent = userAgents.find((agent) => agent.name === userAgent)
 
-      if (agent) {
-        agent.lastSeen = Math.max(agent.lastSeen, timestamp)
-      } else {
-        userAgents.push({ name: userAgent, lastSeen: timestamp })
-      }
+      if (agent) agent.lastSeen = Math.max(agent.lastSeen, timestamp)
+      else userAgents.push({ name: userAgent, lastSeen: timestamp })
 
       const entry: CredentialEntry = {
         objectID,
@@ -383,7 +401,7 @@ export class CredentialEntries {
    */
   public list(): DeepReadonly<Array<CredentialEntry>> {
     try {
-      const workMap: Map<string, CredentialEntry> = new Map()
+      const workMap = new Map<string, CredentialEntry>()
 
       for (let index = 0; index < this.state.length; index++) {
         const entry = this.state.at(index)
@@ -391,14 +409,35 @@ export class CredentialEntries {
 
         const duplicate = workMap.get(entry.credentialID)
 
-        if (duplicate && duplicate.lastUsed >= entry.lastUsed) continue
+        if (duplicate) {
+          const winnerUAs = new Map<
+            string,
+            CredentialEntry['userAgents'][number]
+          >()
 
-        void entry.userAgents.sort(
+          for (const ua of duplicate.userAgents) winnerUAs.set(ua.name, ua)
+
+          for (const ua of entry.userAgents) {
+            const existing = winnerUAs.get(ua.name)
+            if (!existing || existing.lastSeen < ua.lastSeen)
+              winnerUAs.set(ua.name, ua)
+          }
+
+          if (duplicate.lastUsed >= entry.lastUsed) {
+            duplicate.userAgents = Array.from(winnerUAs.values())
+            continue
+          }
+
+          entry.userAgents = Array.from(winnerUAs.values())
+        }
+
+        workMap.set(entry.credentialID, entry)
+      }
+
+      for (const entry of workMap.values())
+        entry.userAgents.sort(
           (a, b) => b.lastSeen - a.lastSeen || a.name.localeCompare(b.name)
         )
-
-        void workMap.set(entry.credentialID, entry)
-      }
 
       return Array.from(workMap.values()).sort(
         (a, b) =>
@@ -442,7 +481,7 @@ export class CredentialEntries {
    * Registers an event listener for the specified event type.
    *
    * @param type The event type.
-   * @param listener The event listener, or `null`.
+   * @param listener The listener to register, or `null`.
    * @param options The listener options.
    */
   public addEventListener<K extends keyof CredentialEntriesEventMap>(
