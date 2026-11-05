@@ -44,14 +44,14 @@
     "@commitlint/config-conventional": "^21.2.4",
     "@playwright/test": "^1.64.1",
     "@types/node": "^26.6.6",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.0",
     "husky": "^9.1.7",
     "playwright": "^1.64.1",
     "prettier": "^3.9.10",
-    "tsdown": "^0.23.4",
+    "tsdown": "^0.23.5",
     "typedoc": "^0.28.20",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "repository": {
     "type": "git",
@@ -69,6 +69,6 @@
     "@sovereignbase/sequenced": "^0.0.2",
     "@sovereignbase/sequencer": "^1.1.1",
     "@sovereignbase/storage": "^3.2.0",
-    "@sovereignbase/utils": "^2.6.0"
+    "@sovereignbase/utils": "^2.7.0"
   }
 }
