@@ -131,16 +131,28 @@ export class RecentEntries {
         void this.dispatchEvent('change', detail)
       })
       //
-      const seen = new Set<string>()
+      const seen = new Map<string, number>()
       const duplicates: number[] = []
+      const retainedDuplicates = new Set<number>()
 
       for (let index = 0; index < this.state.length; index++) {
         const entry = this.state.at(index)
         if (!entry) continue
 
-        if (seen.has(entry.id) || seen.size >= 20) duplicates.push(index)
-        else seen.add(entry.id)
+        const duplicate = seen.get(entry.id)
+
+        if (duplicate !== undefined) {
+          duplicates.push(index)
+          retainedDuplicates.add(duplicate)
+        } else if (seen.size >= 20) {
+          duplicates.push(index)
+        } else {
+          seen.set(entry.id, index)
+        }
       }
+
+      for (const index of retainedDuplicates)
+        void this.state.set(index, this.state.at(index)!)
 
       for (let index = duplicates.length - 1; index >= 0; index--)
         void this.state.delete(duplicates[index])
@@ -173,6 +185,7 @@ export class RecentEntries {
       while (this.state.length > 20) {
         void this.state.pop()
       }
+
       void this.state.snapshot()
     } catch (cause) {
       throw unknownError(cause, 'RecentEntries.update()')
@@ -189,11 +202,14 @@ export class RecentEntries {
   public delete(id: string): void {
     try {
       let deleted = false
+
       for (let index = this.state.length - 1; index >= 0; index--) {
         if (this.state.at(index)?.id !== id) continue
+
         void this.state.delete(index)
         deleted = true
       }
+
       if (deleted) void this.state.snapshot()
     } catch (cause) {
       throw unknownError(cause, 'RecentEntries.delete()')
@@ -201,20 +217,35 @@ export class RecentEntries {
   }
 
   /**
-   * Returns the recent entries ordered by most recent access.
+   * Returns up to 20 unique recent entries ordered by most recent access.
+   *
+   * Entries with equal timestamps are ordered by identifier.
    */
   public list(): DeepReadonly<Array<RecentEntry>> {
     try {
-      return this.state
-        .slice()
+      const workMap: Map<string, RecentEntry> = new Map()
+
+      for (let index = 0; index < this.state.length; index++) {
+        const entry = this.state.at(index)
+        if (!entry) continue
+
+        const duplicate = workMap.get(entry.id)
+
+        if (duplicate && duplicate.dateAccessed >= entry.dateAccessed) continue
+
+        void workMap.set(entry.id, entry)
+      }
+
+      return Array.from(workMap.values())
         .sort(
           (a, b) => b.dateAccessed - a.dateAccessed || a.id.localeCompare(b.id)
         )
+        .slice(0, 20)
     } catch (cause) {
       throw unknownError(cause, 'RecentEntries.list()')
     }
   }
-  //
+
   /**
    * Applies a sequenced delta to the recent entries list.
    *
@@ -244,18 +275,18 @@ export class RecentEntries {
   }
 
   //* ███████╗██╗   ██╗███████╗███╗   ██╗████████╗   ████████╗ █████╗ ██████╗  ██████╗ ███████╗████████╗
-  //* ██╔════╝██║   ██║██╔════╝████╗  ██║╚══██╔══╝   ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ ██╔════╝╚══██╔══╝
+  //* ██╔════╝██║   ██║█████╗  ████╗  ██║╚══██╔══╝   ██╔═════╝██╔══██╗██╔════╝ ██╔════╝█████╗     ██║
   //* █████╗  ██║   ██║█████╗  ██╔██╗ ██║   ██║         ██║   ███████║██████╔╝██║  ███╗█████╗     ██║
-  //* ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║   ██║         ██║   ██╔══██║██╔══██╗██║   ██║██╔══╝     ██║
-  //* ███████╗ ╚████╔╝ ███████╗██║ ╚████║   ██║         ██║   ██║  ██║██║  ██║╚██████╔╝███████╗   ██║
-  //* ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝
+  //* ██╔══╝  ██║   ██║██╔══╝  ██║╚██╗██║   ██║         ██║   ██╔══██║██╔══██╗██║   ██║██╔══╝     ██║
+  //* ███████╗╚██████╔╝███████╗██║ ╚████║   ██║         ██║   ██║  ██║██║  ██║╚██████╔╝███████╗   ██║
+  //* ╚══════╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝         ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝
 
   /**
    * Registers an event listener for the specified event type.
    *
    * @param type The event type.
-   * @param listener The event listener, or `null`.
-   * @param options The event listener options.
+   * @param listener The listener to register, or `null`.
+   * @param options The listener options.
    */
   public addEventListener<K extends keyof RecentEntriesEventMap>(
     type: K,
@@ -275,11 +306,11 @@ export class RecentEntries {
 
   /**
    * Removes an event listener previously registered with
-   * {@link addEventListener}.
+   * {@link removeEventListener}.
    *
    * @param type The event type.
-   * @param listener The event listener to remove, or `null`.
-   * @param options The event listener options.
+   * @param listener The listener to remove, or `null`.
+   * @param options The listener options.
    */
   public removeEventListener<K extends keyof RecentEntriesEventMap>(
     type: K,
@@ -298,10 +329,10 @@ export class RecentEntries {
   }
 
   /**
-   * Dispatches an event to the registered listeners.
+   * Dispatches an event for the specified type.
    *
    * @param type The event type.
-   * @param detail The value exposed through `CustomEvent.detail`.
+   * @param detail The event payload.
    */
   public dispatchEvent<K extends keyof RecentEntriesEventMap>(
     type: K,

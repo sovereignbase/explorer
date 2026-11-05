@@ -6,7 +6,6 @@ import {
   type SequencedArraySnapshot,
 } from '@sovereignbase/sequenced'
 //
-import type { CipherKey } from '@sovereignbase/cryptosuite'
 import {
   invalidateDeviceBinding,
   type DeviceBindingStorage,
@@ -188,24 +187,32 @@ export class CredentialEntries {
         void this.dispatchEvent('change', detail)
       })
 
-      const seenObjects = new Set<string>()
-      const seenCredentials = new Set<string>()
+      const seenObjects = new Map<string, number>()
+      const seenCredentials = new Map<string, number>()
       const duplicates: number[] = []
+      const retainedDuplicates = new Set<number>()
 
       for (let index = 0; index < this.state.length; index++) {
         const entry = this.state.at(index)
         if (!entry) continue
 
-        if (
-          seenObjects.has(entry.objectID) ||
-          seenCredentials.has(entry.credentialID)
-        ) {
+        const object = seenObjects.get(entry.objectID)
+        const credential = seenCredentials.get(entry.credentialID)
+
+        if (object !== undefined || credential !== undefined) {
           duplicates.push(index)
+
+          if (object !== undefined) retainedDuplicates.add(object)
+
+          if (credential !== undefined) retainedDuplicates.add(credential)
         } else {
-          seenObjects.add(entry.objectID)
-          seenCredentials.add(entry.credentialID)
+          seenObjects.set(entry.objectID, index)
+          seenCredentials.set(entry.credentialID, index)
         }
       }
+
+      for (const index of retainedDuplicates)
+        void this.state.set(index, this.state.at(index)!)
 
       for (let index = duplicates.length - 1; index >= 0; index--)
         void this.state.delete(duplicates[index])
@@ -376,13 +383,28 @@ export class CredentialEntries {
    */
   public list(): DeepReadonly<Array<CredentialEntry>> {
     try {
-      return this.state
-        .slice()
-        .sort(
-          (a, b) =>
-            b.lastUsed - a.lastUsed ||
-            a.credentialID.localeCompare(b.credentialID)
+      const workMap: Map<string, CredentialEntry> = new Map()
+
+      for (let index = 0; index < this.state.length; index++) {
+        const entry = this.state.at(index)
+        if (!entry) continue
+
+        const duplicate = workMap.get(entry.credentialID)
+
+        if (duplicate && duplicate.lastUsed >= entry.lastUsed) continue
+
+        void entry.userAgents.sort(
+          (a, b) => b.lastSeen - a.lastSeen || a.name.localeCompare(b.name)
         )
+
+        void workMap.set(entry.credentialID, entry)
+      }
+
+      return Array.from(workMap.values()).sort(
+        (a, b) =>
+          b.lastUsed - a.lastUsed ||
+          a.credentialID.localeCompare(b.credentialID)
+      )
     } catch (cause) {
       throw unknownError(cause, 'CredentialEntries.list()')
     }
@@ -421,7 +443,7 @@ export class CredentialEntries {
    *
    * @param type The event type.
    * @param listener The event listener, or `null`.
-   * @param options The event listener options.
+   * @param options The listener options.
    */
   public addEventListener<K extends keyof CredentialEntriesEventMap>(
     type: K,
@@ -440,12 +462,11 @@ export class CredentialEntries {
   }
 
   /**
-   * Removes an event listener previously registered with
-   * {@link addEventListener}.
+   * Removes a listener for the specified event type.
    *
    * @param type The event type.
-   * @param listener The event listener to remove, or `null`.
-   * @param options The event listener options.
+   * @param listener The listener to remove, or `null`.
+   * @param options The listener options.
    */
   public removeEventListener<K extends keyof CredentialEntriesEventMap>(
     type: K,
@@ -464,10 +485,10 @@ export class CredentialEntries {
   }
 
   /**
-   * Dispatches an event to the registered listeners.
+   * Dispatches an event for the specified type.
    *
    * @param type The event type.
-   * @param detail The value exposed through `CustomEvent.detail`.
+   * @param detail The event payload.
    */
   public dispatchEvent<K extends keyof CredentialEntriesEventMap>(
     type: K,
