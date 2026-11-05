@@ -204,6 +204,10 @@ export class Explorer {
     }
   }
 
+  public static verifySessionDataPIN(candidatePIN: string): boolean {
+    return candidatePIN === this.dataPIN
+  }
+
   /** The number of consecutive failed database linking PIN attempts. */
   private static failCounter: number = 0
 
